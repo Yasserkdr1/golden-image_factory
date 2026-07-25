@@ -1,0 +1,28 @@
+---
+# Password quality
+password_min_length: 14
+password_min_classes: 4
+password_max_repeat: 3
+password_max_sequence: 3
+password_dictionary_check: 1
+password_retry: 3
+
+# Password history
+password_history_remember: 5
+
+# Authentication lockout
+faillock_deny: 5
+faillock_unlock_time: 900
+faillock_root_unlock_time: 60
+faillock_admin_group: sudo
+
+# Password aging
+password_max_days: 365
+password_min_days: 1
+password_warn_age: 7
+password_inactive_days: 30
+
+# Global security settings
+system_umask: "027"
+sha_crypt_min_rounds: 65536
+session_timeout: 900

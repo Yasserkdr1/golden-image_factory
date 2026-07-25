@@ -1,0 +1,14 @@
+---
+- name: Ubuntu hardening
+  hosts: servers
+  become: true
+  pre_tasks:
+    - name: Create hardening backup directory
+      ansible.builtin.file:
+        path: "{{ hardening_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+  roles:
+    - pam_password_policy

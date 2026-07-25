@@ -1,0 +1,213 @@
+---
+# tasks file for roles/pam_password_policy
+
+# =============================================================================
+# Backups
+# =============================================================================
+
+- name: "01 | Backup pwquality configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: /etc/security/pwquality.conf
+
+- name: "01 | Backup pwhistory configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: /etc/security/pwhistory.conf
+
+- name: "01 | Backup faillock configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: /etc/security/faillock.conf
+
+
+# =============================================================================
+# PAM password policy configuration
+# =============================================================================
+
+- name: "01 | Configure password quality policy"
+  ansible.builtin.template:
+    src: pwquality.conf.j2
+    dest: /etc/security/pwquality.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: "01 | Configure password history policy"
+  ansible.builtin.template:
+    src: pwhistory.conf.j2
+    dest: /etc/security/pwhistory.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: "01 | Configure authentication failure lockout policy"
+  ansible.builtin.template:
+    src: faillock.conf.j2
+    dest: /etc/security/faillock.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+
+
+- name: "01 | Deploy pam_pwquality PAM profile"
+  ansible.builtin.template:
+    src: pam_pwquality
+    dest: /usr/share/pam-configs/hardening_pwquality
+    owner: root
+    group: root
+    mode: "0644"
+  register: pam_pwquality_profile
+
+- name: "01 | Deploy pam_pwhistory PAM profile"
+  ansible.builtin.template:
+    src: pam_pwhistory
+    dest: /usr/share/pam-configs/hardening_pwhistory
+    owner: root
+    group: root
+    mode: "0644"
+  register: pam_pwhistory_profile
+
+- name: "01 | Deploy pam_faillock PAM profile"
+  ansible.builtin.template:
+    src: pam_faillock
+    dest: /usr/share/pam-configs/hardening_faillock
+    owner: root
+    group: root
+    mode: "0644"
+  register: pam_faillock_profile
+
+- name: "01 | Deploy pam_faillock preauth profile"
+  ansible.builtin.template:
+    src: pam_faillock_notify
+    dest: /usr/share/pam-configs/hardening_faillock_notify
+    owner: root
+    group: root
+    mode: "0644"
+  register: pam_faillock_notify_profile
+
+- name: "01 | Update PAM configuration"
+  ansible.builtin.command:
+    cmd: pam-auth-update --force
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+
+- name: "01 | Backup su PAM configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: /etc/pam.d/su
+
+- name: "01 | Restrict su access to sudo group"
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/su
+    regexp: '^\s*auth\s+required\s+pam_wheel\.so'
+    line: 'auth required pam_wheel.so use_uid group=sudo'
+    insertafter: EOF
+
+- name: "01 | Configure password aging and login defaults"
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: "^{{ item.key }}\\s+"
+    line: "{{ item.key }} {{ item.value }}"
+  loop:
+    - { key: "PASS_MAX_DAYS", value: "{{ password_max_days }}" }
+    - { key: "PASS_MIN_DAYS", value: "{{ password_min_days }}" }
+    - { key: "PASS_WARN_AGE", value: "{{ password_warn_age }}" }
+    - { key: "UMASK", value: "{{ system_umask }}" }
+    - { key: "ENCRYPT_METHOD", value: "SHA512" }
+    - { key: "SHA_CRYPT_MIN_ROUNDS", value: "{{ sha_crypt_min_rounds }}" }
+
+# =============================================================================
+# Existing user password aging policy
+# =============================================================================
+
+- name: "01 | Read local user database"
+  ansible.builtin.getent:
+    database: passwd
+
+- name: "01 | Read current shadow aging policy"
+  ansible.builtin.getent:
+    database: shadow
+
+- name: "01 | Apply password aging policy when required"
+  ansible.builtin.command:
+    cmd: >
+      chage
+      --maxdays {{ password_max_days }}
+      --mindays {{ password_min_days }}
+      --warndays {{ password_warn_age }}
+      --inactive {{ password_inactive_days }}
+      {{ item.key }}
+  loop: "{{ ansible_facts.getent_passwd | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - item.value[1] | int >= 1000
+    - item.value[5] is not search('nologin|false')
+    - >
+      (ansible_facts.getent_shadow[item.key][2] | default('') | string) != (password_min_days | string)
+      or (ansible_facts.getent_shadow[item.key][3] | default('') | string) != (password_max_days | string)
+      or (ansible_facts.getent_shadow[item.key][4] | default('') | string) != (password_warn_age | string)
+      or (ansible_facts.getent_shadow[item.key][5] | default('') | string) != (password_inactive_days | string)
+
+- name: "01 | Backup global shell configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ item }}"
+  loop:
+    - /etc/bash.bashrc
+    - /etc/profile
+
+- name: "01 | Configure global umask"
+  ansible.builtin.lineinfile:
+    path: "{{ item }}"
+    regexp: '^\s*umask\s+[0-9]+'
+    line: "umask {{ system_umask }}"
+    insertafter: EOF
+  loop:
+    - /etc/bash.bashrc
+    - /etc/profile
+
+- name: "01 | Secure default user initialization files"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0740"
+  loop:
+    - /etc/skel/.bashrc
+    - /etc/skel/.profile
+
+- name: "01 | Find existing user initialization files"
+  ansible.builtin.find:
+    paths: /home
+    recurse: true
+    depth: 2
+    file_type: file
+    patterns:
+      - ".bashrc"
+      - ".profile"
+      - ".bash_profile"
+    hidden: true
+  register: user_init_files
+
+- name: "01 | Secure existing user initialization files"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    mode: "0740"
+  loop: "{{ user_init_files.files }}"
+
+- name: "01 | Configure interactive session timeout"
+  ansible.builtin.template:
+    src: 99-tmout.sh.j2
+    dest: /etc/profile.d/99-tmout.sh
+    owner: root
+    group: root
+    mode: "0644"

@@ -1,0 +1,4 @@
+---
+hardening_backup_dir: /var/backups/hardening
+target_os: Ubuntu
+target_version: "24.04"

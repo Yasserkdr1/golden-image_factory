@@ -1,0 +1,9 @@
+Name: Hardening - Authentication failure precheck
+Default: yes
+Priority: 1025
+Auth-Type: Primary
+Auth:
+    requisite    pam_faillock.so preauth
+Account-Type: Primary
+Account:
+    required     pam_faillock.so

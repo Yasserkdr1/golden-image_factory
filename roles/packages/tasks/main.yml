@@ -1,0 +1,43 @@
+---
+# =============================================================================
+# 00 — System update and hardening package installation
+# =============================================================================
+
+- name: "00 | Complete pending dpkg configurations"
+  ansible.builtin.command:
+    cmd: dpkg --configure -a
+  register: dpkg_configure
+  changed_when: dpkg_configure.stdout != ""
+
+- name: "00 | Repair broken APT dependencies"
+  ansible.builtin.apt:
+    state: fixed
+
+- name: "00 | Update APT package cache"
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: "00 | Check APT dependency consistency"
+  ansible.builtin.command:
+    cmd: apt-get check
+  changed_when: false
+
+- name: "00 | Upgrade system packages"
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: true
+
+- name: "00 | Install required hardening packages"
+  ansible.builtin.apt:
+    name: "{{ hardening_packages }}"
+    state: present
+  register: hardening_pkg_install
+
+- name: "00 | Display package installation result"
+  ansible.builtin.debug:
+    msg: >-
+      Package installation:
+      {{ 'changes applied' if hardening_pkg_install.changed
+      else 'no changes required' }}
+

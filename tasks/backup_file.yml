@@ -1,0 +1,16 @@
+---
+- name: "Backup | Check if source file exists"
+  ansible.builtin.stat:
+    path: "{{ backup_source }}"
+  register: backup_source_stat
+
+- name: "Backup | Save original file"
+  ansible.builtin.copy:
+    src: "{{ backup_source }}"
+    dest: "{{ hardening_backup_dir }}/{{ backup_source | basename }}.backup"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  when: backup_source_stat.stat.exists

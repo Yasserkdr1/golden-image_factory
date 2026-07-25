@@ -1,0 +1,22 @@
+---
+# defaults file for roles/packages
+hardening_packages:
+  - libpam-pwquality
+  - libpam-tmpdir
+  - auditd
+  - nftables
+  - aide  
+  - aide-common
+  - apparmor
+  - apparmor-utils
+  - apparmor-profiles
+  - rkhunter
+  - fail2ban
+  - rsyslog
+  - sysstat
+  - acct
+  - cron
+  - at
+  - debsums
+  - apt-listchanges
+  - apt-show-versions

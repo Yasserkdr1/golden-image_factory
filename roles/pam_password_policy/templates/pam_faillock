@@ -1,0 +1,6 @@
+Name: Hardening - Authentication failure lockout
+Default: yes
+Priority: 0
+Auth-Type: Primary
+Auth:
+    [default=die]    pam_faillock.so authfail
