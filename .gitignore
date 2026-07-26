@@ -5,3 +5,4 @@
 .vault_pass
 *.pem
 *.key
+inventory/hosts.ini

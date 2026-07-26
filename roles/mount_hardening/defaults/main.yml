@@ -1,0 +1,31 @@
+---
+mount_hardening_entries:
+  - path: /tmp
+    required_opts:
+      - nodev
+      - nosuid
+      - noexec
+
+  - path: /home
+    required_opts:
+      - nodev
+      - nosuid
+
+  - path: /var
+    required_opts:
+      - nodev
+      - nosuid
+
+dev_shm_opts:
+  - defaults
+  - nodev
+  - nosuid
+  - noexec
+
+proc_opts:
+  - defaults
+  - nodev
+  - nosuid
+  - noexec
+  - hidepid=2
+

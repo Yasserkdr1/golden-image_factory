@@ -1,0 +1,100 @@
+---
+# =============================================================================
+# — Mount hardening
+# =============================================================================
+
+- name: "03 | Backup fstab configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: /etc/fstab
+
+- name: "03 | Read existing fstab mount entries"
+  ansible.builtin.command:
+    cmd: "findmnt --fstab --noheadings --output SOURCE,FSTYPE,OPTIONS --target {{ item.path }}"
+  loop: "{{ mount_hardening_entries }}"
+  register: mount_fstab_entries
+  changed_when: false
+  failed_when: false
+
+- name: "03 | Display detected fstab mount entries"
+  ansible.builtin.debug:
+    msg: "{{ item.stdout }}"
+  loop: "{{ mount_fstab_entries.results }}"
+  when:
+    - item.stdout is defined
+    - item.stdout | length > 0
+
+- name: "03 | Build detected mount configuration"
+  ansible.builtin.set_fact:
+    detected_mounts: >-
+      {{
+        (detected_mounts | default([]))
+        +
+        [{
+          'path': item.item.path,
+          'src': item.stdout.split()[0],
+          'fstype': item.stdout.split()[1],
+          'current_opts': item.stdout.split()[2].split(','),
+          'required_opts': item.item.required_opts
+        }]
+      }}
+  loop: "{{ mount_fstab_entries.results }}"
+  when:
+    - item.rc == 0
+    - item.stdout | length > 0
+
+- name: "03 | Display detected mount configuration"
+  ansible.builtin.debug:
+    var: detected_mounts
+
+- name: "03 | Build final mount options"
+  ansible.builtin.set_fact:
+    hardened_mounts: >-
+      {{
+        (hardened_mounts | default([]))
+        +
+        [{
+          'path': item.path,
+          'src': item.src,
+          'fstype': item.fstype,
+          'final_opts': (item.current_opts + item.required_opts) | unique
+        }]
+      }}
+  loop: "{{ detected_mounts }}"
+
+- name: "03 | Display final mount configuration"
+  ansible.builtin.debug:
+    var: hardened_mounts
+
+- name: "03 | Apply hardened mount options"
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.src }}"
+    fstype: "{{ item.fstype }}"
+    opts: "{{ item.final_opts | join(',') }}"
+    dump: "0"
+    passno: "1"
+    state: mounted
+  loop: "{{ hardened_mounts }}"
+
+
+- name: "03 | Configure /dev/shm mount options"
+  ansible.posix.mount:
+    path: /dev/shm
+    src: tmpfs
+    fstype: tmpfs
+    opts: "{{ dev_shm_opts | join(',') }}"
+    dump: "0"
+    passno: "0"
+    state: mounted
+
+- name: "03 | Configure /proc mount options"
+  ansible.posix.mount:
+    path: /proc
+    src: proc
+    fstype: proc
+    opts: "{{ proc_opts | join(',')}}"
+    passno: "0"
+    dump: "0"
+    state: mounted
