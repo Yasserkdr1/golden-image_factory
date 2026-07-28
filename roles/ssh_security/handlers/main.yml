@@ -1,0 +1,13 @@
+---
+# handlers file for roles/ssh_security
+
+- name: Validate SSH configuration syntax
+  ansible.builtin.command:
+    cmd: sshd -t
+  changed_when: false
+  listen: "Restart SSH service"
+
+- name: Restart SSH service
+  ansible.builtin.service:
+    name: "{{ (ansible_facts.services['ssh.service'] is defined) | ternary('ssh', 'sshd') }}"
+    state: restarted

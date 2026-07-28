@@ -1,0 +1,20 @@
+---
+# defaults file for roles/ssh_security
+
+ssh_config_file: "/etc/ssh/sshd_config"
+
+# Directives based on CIS Level 1 & Lynis recommendations
+ssh_permit_root_login: "no"
+ssh_password_authentication: "no"
+ssh_permit_empty_passwords: "no"
+ssh_max_auth_tries: 3
+ssh_client_alive_interval: 300
+ssh_client_alive_count_max: 0
+
+# Extended security settings (Lynis recommendations)
+ssh_allow_tcp_forwarding: "no"
+ssh_allow_agent_forwarding: "no"
+ssh_x11_forwarding: "no"
+ssh_max_sessions: 2
+ssh_log_level: "VERBOSE"
+ssh_tcp_keep_alive: "no"

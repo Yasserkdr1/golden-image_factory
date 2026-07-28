@@ -1,0 +1,39 @@
+---
+# =============================================================================
+# — SSH Hardening (CIS Level 1 / Lynis Benchmark)
+# =============================================================================
+
+- name: "02 | Backup SSH daemon configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ ssh_config_file }}"
+
+- name: "02 | Configure SSH hardening directives"
+  ansible.builtin.lineinfile:
+    path: "{{ ssh_config_file }}"
+    regexp: "^#?\\s*{{ item.option }}\\b"
+    line: "{{ item.option }} {{ item.value }}"
+    state: present
+    validate: sshd -t -f %s
+  loop:
+    - { option: "PermitRootLogin", value: "{{ ssh_permit_root_login }}" }
+    - { option: "PasswordAuthentication", value: "{{ ssh_password_authentication }}" }
+    - { option: "PermitEmptyPasswords", value: "{{ ssh_permit_empty_passwords }}" }
+    - { option: "MaxAuthTries", value: "{{ ssh_max_auth_tries }}" }
+    - { option: "ClientAliveInterval", value: "{{ ssh_client_alive_interval }}" }
+    - { option: "ClientAliveCountMax", value: "{{ ssh_client_alive_count_max }}" }
+    - { option: "AllowTcpForwarding", value: "{{ ssh_allow_tcp_forwarding }}" }
+    - { option: "AllowAgentForwarding", value: "{{ ssh_allow_agent_forwarding }}" }
+    - { option: "X11Forwarding", value: "{{ ssh_x11_forwarding }}" }
+    - { option: "MaxSessions", value: "{{ ssh_max_sessions }}" }
+    - { option: "LogLevel", value: "{{ ssh_log_level }}" }
+    - { option: "TCPKeepAlive", value: "{{ ssh_tcp_keep_alive }}" }
+  notify: Restart SSH service
+
+- name: "02 | Secure permissions on sshd_config file"
+  ansible.builtin.file:
+    path: "{{ ssh_config_file }}"
+    owner: root
+    group: root
+    mode: "0600"

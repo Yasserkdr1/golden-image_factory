@@ -1,8 +1,11 @@
 ---
-- name: Ubuntu hardening
-  hosts: servers
+- name: Hardened Ubuntu Image Build Playbook
+  hosts: all
   become: true
   pre_tasks:
+    - name: Populate service facts
+      ansible.builtin.service_facts:
+
     - name: Create hardening backup directory
       ansible.builtin.file:
         path: "{{ hardening_backup_dir }}"
@@ -10,7 +13,6 @@
         owner: root
         group: root
         mode: "0700"
+
   roles:
-    - packages
-    - pam_password_policy
-    - mount_hardening
+    - role: ssh_security
