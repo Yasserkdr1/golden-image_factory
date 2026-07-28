@@ -1,0 +1,6 @@
+---
+# defaults file for roles/apparmor_hardening
+
+apparmor_grub_dropin_dir: "/etc/default/grub.d"
+apparmor_grub_dropin_file: "/etc/default/grub.d/99-apparmor.cfg"
+apparmor_profiles_dir: "/etc/apparmor.d"

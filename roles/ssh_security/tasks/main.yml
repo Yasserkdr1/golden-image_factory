@@ -1,39 +1,35 @@
 ---
 # =============================================================================
-# — SSH Hardening (CIS Level 1 / Lynis Benchmark)
+# — SSH Hardening (CIS Level 1 / Lynis Benchmark) using 99- drop-in pattern
 # =============================================================================
 
-- name: "02 | Backup SSH daemon configuration"
-  ansible.builtin.include_tasks:
-    file: "{{ playbook_dir }}/tasks/backup_file.yml"
-  vars:
-    backup_source: "{{ ssh_config_file }}"
+- name: "02 | Ensure sshd_config.d directory exists"
+  ansible.builtin.file:
+    path: "{{ ssh_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
 
-- name: "02 | Configure SSH hardening directives"
+- name: "02 | Ensure main sshd_config includes sshd_config.d/*.conf"
   ansible.builtin.lineinfile:
-    path: "{{ ssh_config_file }}"
-    regexp: "^#?\\s*{{ item.option }}\\b"
-    line: "{{ item.option }} {{ item.value }}"
-    state: present
-    validate: sshd -t -f %s
-  loop:
-    - { option: "PermitRootLogin", value: "{{ ssh_permit_root_login }}" }
-    - { option: "PasswordAuthentication", value: "{{ ssh_password_authentication }}" }
-    - { option: "PermitEmptyPasswords", value: "{{ ssh_permit_empty_passwords }}" }
-    - { option: "MaxAuthTries", value: "{{ ssh_max_auth_tries }}" }
-    - { option: "ClientAliveInterval", value: "{{ ssh_client_alive_interval }}" }
-    - { option: "ClientAliveCountMax", value: "{{ ssh_client_alive_count_max }}" }
-    - { option: "AllowTcpForwarding", value: "{{ ssh_allow_tcp_forwarding }}" }
-    - { option: "AllowAgentForwarding", value: "{{ ssh_allow_agent_forwarding }}" }
-    - { option: "X11Forwarding", value: "{{ ssh_x11_forwarding }}" }
-    - { option: "MaxSessions", value: "{{ ssh_max_sessions }}" }
-    - { option: "LogLevel", value: "{{ ssh_log_level }}" }
-    - { option: "TCPKeepAlive", value: "{{ ssh_tcp_keep_alive }}" }
+    path: /etc/ssh/sshd_config
+    regexp: '^#?\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf'
+    line: 'Include /etc/ssh/sshd_config.d/*.conf'
+    insertbefore: BOF
+
+- name: "02 | Deploy 99-hardening.conf drop-in file"
+  ansible.builtin.template:
+    src: 99-hardening.conf.j2
+    dest: "{{ ssh_dropin_file }}"
+    owner: root
+    group: root
+    mode: "0600"
   notify: Restart SSH service
 
-- name: "02 | Secure permissions on sshd_config file"
+- name: "02 | Secure permissions on main sshd_config file"
   ansible.builtin.file:
-    path: "{{ ssh_config_file }}"
+    path: /etc/ssh/sshd_config
     owner: root
     group: root
     mode: "0600"

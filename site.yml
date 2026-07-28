@@ -15,4 +15,7 @@
         mode: "0700"
 
   roles:
+    - role: auditd_hardening
+    - role: apparmor_hardening
     - role: ssh_security
+  

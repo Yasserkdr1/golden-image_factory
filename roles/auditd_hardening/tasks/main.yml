@@ -1,0 +1,132 @@
+---
+# =============================================================================
+# auditd_hardening — Install, configure and load CIS audit rules
+# Based on section 3 of harden-ubuntu.sh
+# =============================================================================
+
+- name: "Auditd | Ensure auditd package is installed"
+  ansible.builtin.apt:
+    name:
+      - auditd
+      - sysstat
+      - acct
+    state: present
+    update_cache: true
+
+- name: "Auditd | Enable and start auditd service"
+  ansible.builtin.service:
+    name: auditd
+    enabled: true
+    state: started
+
+- name: "Auditd | Ensure /etc/audit/rules.d directory exists"
+  ansible.builtin.file:
+    path: /etc/audit/rules.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: "Auditd | Backup existing auditd.conf"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ auditd_conf_file }}"
+
+- name: "Auditd | Deploy CIS hardening audit rules"
+  ansible.builtin.copy:
+    dest: "{{ auditd_rules_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+    content: |
+      # Buffer size
+      -D
+      -b {{ auditd_buffer_size }}
+      -f 1
+
+      # Identity changes
+      -w /etc/passwd -p wa -k identity
+      -w /etc/group -p wa -k identity
+      -w /etc/shadow -p wa -k identity
+      -w /etc/gshadow -p wa -k identity
+
+      # Sudo scope changes
+      -w /etc/sudoers -p wa -k scope
+      -w /etc/sudoers.d/ -p wa -k scope
+
+      # Sudo command logging
+      -w /var/log/sudo.log -p wa -k actions
+
+      # Login events
+      -w /var/log/lastlog -p wa -k logins
+      -w /var/run/faillock/ -p wa -k logins
+
+      # Audit log access
+      -w /var/log/audit/ -p r -k auditlog
+
+      # Time changes
+      -a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time-change
+      -a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -k time-change
+
+      # Network configuration changes
+      -w /etc/hosts -p wa -k network
+      -w /etc/network/ -p wa -k network
+
+      # AppArmor MAC policy changes
+      -w /etc/apparmor/ -p wa -k MAC-policy
+      -w /etc/apparmor.d/ -p wa -k MAC-policy
+
+      # Privilege escalation detection
+      -a always,exit -F arch=b64 -S execve -C uid!=euid -F euid=0 -k privileged
+      -a always,exit -F arch=b32 -S execve -C uid!=euid -F euid=0 -k privileged
+
+      # Kernel module loading/unloading
+      -a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules
+      -a always,exit -F arch=b32 -S init_module,finit_module,delete_module -k modules
+
+      # Lock audit rules (make immutable)
+      -e 2
+  notify: Restart auditd
+
+- name: "Auditd | Configure auditd.conf (log format, rotation)"
+  ansible.builtin.lineinfile:
+    path: "{{ auditd_conf_file }}"
+    regexp: "^{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+  loop:
+    - { key: "log_format",          value: "{{ auditd_log_format }}" }
+    - { key: "max_log_file_action", value: "{{ auditd_max_log_file_action }}" }
+    - { key: "max_log_file",        value: "{{ auditd_max_log_file }}" }
+  notify: Restart auditd
+
+- name: "Auditd | Secure auditd.conf file permissions"
+  ansible.builtin.file:
+    path: "{{ auditd_conf_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: "Auditd | Load new audit rules with augenrules"
+  ansible.builtin.command:
+    cmd: augenrules --load
+  failed_when: false
+  changed_when: false
+  notify: Restart auditd
+
+- name: "Auditd | Enable and start sysstat"
+  ansible.builtin.service:
+    name: sysstat
+    enabled: true
+    state: started
+  failed_when: false
+
+- name: "Auditd | Enable process accounting (acct or psacct)"
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - acct
+    - psacct
+  failed_when: false

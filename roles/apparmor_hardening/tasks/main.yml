@@ -1,0 +1,54 @@
+---
+# =============================================================================
+# apparmor_hardening — Enable AppArmor, enforce profiles, persist via GRUB drop-in
+# =============================================================================
+
+- name: "AppArmor | Ensure AppArmor packages are installed"
+  ansible.builtin.apt:
+    name:
+      - apparmor
+      - apparmor-utils
+      - apparmor-profiles
+    state: present
+    update_cache: true
+
+- name: "AppArmor | Enable and start AppArmor service"
+  ansible.builtin.service:
+    name: apparmor
+    enabled: true
+    state: started
+
+- name: "AppArmor | Ensure /etc/default/grub.d directory exists"
+  ansible.builtin.file:
+    path: "{{ apparmor_grub_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "AppArmor | Deploy 99-apparmor.cfg GRUB drop-in file"
+  ansible.builtin.copy:
+    dest: "{{ apparmor_grub_dropin_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT apparmor=1 security=apparmor"
+  notify: Update GRUB
+
+- name: "AppArmor | Set all AppArmor profiles to enforce mode"
+  ansible.builtin.command:
+    cmd: aa-enforce {{ apparmor_profiles_dir }}/
+  changed_when: false
+  failed_when: false
+
+- name: "AppArmor | Verify AppArmor status"
+  ansible.builtin.command:
+    cmd: aa-status
+  register: aa_status
+  changed_when: false
+  failed_when: false
+
+- name: "AppArmor | Display AppArmor status"
+  ansible.builtin.debug:
+    var: aa_status.stdout_lines

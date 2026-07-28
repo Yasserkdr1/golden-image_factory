@@ -1,0 +1,7 @@
+---
+# handlers file for roles/auditd_hardening
+
+- name: Restart auditd
+  ansible.builtin.service:
+    name: auditd
+    state: restarted

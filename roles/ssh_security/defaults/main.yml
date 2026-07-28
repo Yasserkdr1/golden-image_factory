@@ -1,11 +1,12 @@
 ---
 # defaults file for roles/ssh_security
 
-ssh_config_file: "/etc/ssh/sshd_config"
+ssh_dropin_dir: "/etc/ssh/sshd_config.d"
+ssh_dropin_file: "/etc/ssh/sshd_config.d/99-hardening.conf"
 
 # Directives based on CIS Level 1 & Lynis recommendations
 ssh_permit_root_login: "no"
-ssh_password_authentication: "no"
+ssh_password_authentication: "yes" # Set to 'yes' for password testing, 'no' for production
 ssh_permit_empty_passwords: "no"
 ssh_max_auth_tries: 3
 ssh_client_alive_interval: 300
