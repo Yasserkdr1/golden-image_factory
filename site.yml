@@ -11,6 +11,4 @@
         group: root
         mode: "0700"
   roles:
-    - packages
-    - pam_password_policy
-    - mount_hardening
+    - sudo
