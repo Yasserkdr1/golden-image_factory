@@ -1,0 +1,7 @@
+# =============================================================================
+# Managed by Ansible — Time synchronization
+# =============================================================================
+
+[Time]
+NTP={{ time_sync_ntp_servers | join(' ') }}
+FallbackNTP={{ time_sync_fallback_ntp_servers | join(' ') }}

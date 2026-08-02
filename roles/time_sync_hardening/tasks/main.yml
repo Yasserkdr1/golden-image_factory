@@ -1,0 +1,62 @@
+---
+# =============================================================================
+# 15 — Time Synchronization Hardening
+# =============================================================================
+
+- name: "15 | Create timesyncd drop-in directory"
+  ansible.builtin.file:
+    path: "{{ time_sync_dropin_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "15 | Check whether timesyncd hardening file exists"
+  ansible.builtin.stat:
+    path: "{{ time_sync_config_file }}"
+  register: time_sync_config_status
+
+- name: "15 | Backup existing timesyncd hardening file"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ time_sync_config_file }}"
+  when: time_sync_config_status.stat.exists
+
+- name: "15 | Deploy timesyncd configuration"
+  ansible.builtin.template:
+    src: 99-hardening.conf.j2
+    dest: "{{ time_sync_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart systemd-timesyncd
+
+- name: "15 | Enable and start systemd-timesyncd"
+  ansible.builtin.systemd_service:
+    name: "{{ time_sync_service }}"
+    enabled: true
+    state: started
+
+- name: "15 | Flush timesyncd handler"
+  ansible.builtin.meta: flush_handlers
+
+- name: "15 | Verify timesyncd service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active "{{ time_sync_service }}"
+  register: time_sync_service_status
+  changed_when: false
+  failed_when: time_sync_service_status.stdout != "active"
+
+- name: "15 | Read time synchronization status"
+  ansible.builtin.command:
+    cmd: timedatectl show
+  register: time_sync_status
+  changed_when: false
+
+- name: "15 | Verify NTP service is enabled"
+  ansible.builtin.assert:
+    that:
+      - "'NTP=yes' in time_sync_status.stdout"
+    fail_msg: "NTP synchronization is not enabled."
+    success_msg: "NTP synchronization is enabled."
