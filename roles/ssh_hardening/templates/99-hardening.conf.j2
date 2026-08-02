@@ -1,0 +1,29 @@
+# CIS Level 1 & Lynis SSH Hardening Drop-in
+LogLevel {{ ssh_log_level }}
+
+MaxAuthTries {{ ssh_max_auth_tries }}
+MaxSessions {{ ssh_max_sessions }}
+MaxStartups {{ ssh_max_startups }}
+LoginGraceTime {{ ssh_login_grace_time }}
+
+ClientAliveInterval {{ ssh_client_alive_interval }}
+ClientAliveCountMax {{ ssh_client_alive_count_max }}
+TCPKeepAlive {{ ssh_tcp_keep_alive }}
+
+PermitRootLogin {{ ssh_permit_root_login }}
+PasswordAuthentication {{ ssh_password_authentication }}
+PermitEmptyPasswords {{ ssh_permit_empty_passwords }}
+PermitUserEnvironment {{ ssh_permit_user_environment }}
+IgnoreRhosts {{ ssh_ignore_rhosts }}
+HostbasedAuthentication {{ ssh_hostbased_authentication }}
+
+X11Forwarding {{ ssh_x11_forwarding }}
+AllowTcpForwarding {{ ssh_allow_tcp_forwarding }}
+AllowAgentForwarding {{ ssh_allow_agent_forwarding }}
+AllowStreamLocalForwarding {{ ssh_allow_stream_local_forwarding }}
+
+Banner {{ ssh_banner }}
+
+KexAlgorithms {{ ssh_kex_algorithms | replace('\n', '') | replace(' ', '') }}
+Ciphers {{ ssh_ciphers | replace('\n', '') | replace(' ', '') }}
+MACs {{ ssh_macs | replace('\n', '') | replace(' ', '') }}

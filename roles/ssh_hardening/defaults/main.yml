@@ -1,0 +1,47 @@
+---
+# SSH configuration paths
+ssh_dropin_dir: "/etc/ssh/sshd_config.d"
+ssh_dropin_file: "/etc/ssh/sshd_config.d/00-hardening.conf"
+
+# Authentication
+ssh_permit_root_login: "no"
+ssh_password_authentication: "yes"
+ssh_permit_empty_passwords: "no"
+ssh_permit_user_environment: "no"
+ssh_ignore_rhosts: "yes"
+ssh_hostbased_authentication: "no"
+
+# Connection limits
+ssh_max_auth_tries: 3
+ssh_max_sessions: 2
+ssh_max_startups: "10:30:60"
+ssh_login_grace_time: 60
+
+# Session timeout
+ssh_client_alive_interval: 300
+ssh_client_alive_count_max: 2
+ssh_tcp_keep_alive: "no"
+
+# Forwarding
+ssh_x11_forwarding: "no"
+ssh_allow_tcp_forwarding: "no"
+ssh_allow_agent_forwarding: "no"
+ssh_allow_stream_local_forwarding: "no"
+
+# Logging and banner
+ssh_log_level: "VERBOSE"
+ssh_banner: "/etc/issue.net"
+
+# Cryptographic algorithms
+ssh_kex_algorithms: >-
+  curve25519-sha256,curve25519-sha256@libssh.org,
+  diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+
+ssh_ciphers: >-
+  chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,
+  aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+
+ssh_macs: >-
+  hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,
+  umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,
+  umac-128@openssh.com

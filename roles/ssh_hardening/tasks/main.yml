@@ -1,0 +1,52 @@
+---
+# =============================================================================
+# — SSH Hardening (CIS Level 1 / Lynis Benchmark) using 99- drop-in pattern
+# =============================================================================
+
+- name: "02 | Ensure sshd_config.d directory exists"
+  ansible.builtin.file:
+    path: "{{ ssh_dropin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "02 | Ensure main sshd_config includes sshd_config.d/*.conf"
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf'
+    line: 'Include /etc/ssh/sshd_config.d/*.conf'
+    insertbefore: BOF
+
+- name: "02 | Deploy local console legal banner"
+  ansible.builtin.template:
+    src: issue.net.j2
+    dest: /etc/issue
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: "02 | Deploy SSH legal banner"
+  ansible.builtin.template:
+    src: issue.net.j2
+    dest: /etc/issue.net
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: "02 | Deploy 99-hardening.conf drop-in file"
+  ansible.builtin.template:
+    src: 99-hardening.conf.j2
+    dest: "{{ ssh_dropin_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart SSH service
+
+
+- name: "02 | Secure permissions on main sshd_config file"
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: "0600"
