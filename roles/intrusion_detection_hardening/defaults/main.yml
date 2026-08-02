@@ -1,0 +1,20 @@
+---
+intrusion_detection_packages:
+  - fail2ban
+  - rkhunter
+
+fail2ban_config_directory: "/etc/fail2ban"
+fail2ban_jail_file: "/etc/fail2ban/jail.d/99-sshd-hardening.local"
+
+fail2ban_bantime: 3600
+fail2ban_findtime: 600
+fail2ban_maxretry: 5
+
+fail2ban_ssh_port: "{{ ssh_port | default(22) }}"
+fail2ban_backend: "systemd"
+
+rkhunter_default_file: "/etc/default/rkhunter"
+rkhunter_enable_daily_run: true
+rkhunter_update_properties: true
+
+remove_postfix: false
