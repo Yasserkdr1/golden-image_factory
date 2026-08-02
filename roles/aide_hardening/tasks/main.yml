@@ -1,0 +1,83 @@
+---
+# =============================================================================
+# 08 — AIDE File Integrity Monitoring
+# =============================================================================
+
+- name: "08 | Install AIDE packages"
+  ansible.builtin.apt:
+    name: "{{ aide_packages }}"
+    state: present
+    update_cache: false
+
+- name: "08 | Ensure AIDE database directory exists"
+  ansible.builtin.file:
+    path: /var/lib/aide
+    state: directory
+    owner: _aide
+    group: _aide
+    mode: "0750"
+
+- name: "08 | Check whether AIDE database exists"
+  ansible.builtin.stat:
+    path: "{{ aide_database_file }}"
+  register: aide_database_status
+
+- name: "08 | Initialize AIDE database"
+  ansible.builtin.command:
+    cmd: aideinit -y -f
+  register: aide_initialization
+  changed_when: true
+  when:
+    - aide_initialize_database | bool
+    - not aide_database_status.stat.exists
+
+- name: "08 | Check generated AIDE database"
+  ansible.builtin.stat:
+    path: "{{ aide_new_database_file }}"
+  register: aide_new_database_status
+  when:
+    - aide_initialize_database | bool
+    - not aide_database_status.stat.exists
+
+- name: "08 | Activate generated AIDE database"
+  ansible.builtin.command:
+    argv:
+      - mv
+      - "{{ aide_new_database_file }}"
+      - "{{ aide_database_file }}"
+  changed_when: true
+  when:
+    - aide_initialize_database | bool
+    - not aide_database_status.stat.exists
+    - aide_new_database_status.stat.exists | default(false)
+
+- name: "08 | Verify active AIDE database exists"
+  ansible.builtin.stat:
+    path: "{{ aide_database_file }}"
+  register: aide_active_database_status
+
+- name: "08 | Fail if AIDE database was not created"
+  ansible.builtin.fail:
+    msg: "The AIDE database could not be created at {{ aide_database_file }}."
+  when:
+    - aide_initialize_database | bool
+    - not aide_active_database_status.stat.exists
+
+- name: "08 | Run initial AIDE integrity check"
+  ansible.builtin.command:
+    cmd: aide.wrapper --check
+  register: aide_check_result
+  changed_when: false
+  failed_when: aide_check_result.rc not in [0, 1, 2, 3, 4, 5, 6, 7]
+  when:
+    - aide_run_initial_check | bool
+    - aide_active_database_status.stat.exists
+
+- name: "08 | Install daily AIDE integrity check"
+  ansible.builtin.template:
+    src: aide-daily.sh.j2
+    dest: "{{ aide_daily_script }}"
+    owner: root
+    group: root
+    mode: "0750"
+  when: aide_enable_daily_check | bool

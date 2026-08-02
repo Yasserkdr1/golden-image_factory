@@ -17,4 +17,4 @@
     - ssh_hardening
     - auditd_hardening
     - apparmor_hardening
-  
+    - aide_hardening
