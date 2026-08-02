@@ -1,0 +1,23 @@
+---
+cron_at_packages:
+  - cron
+  - at
+
+cron_allowed_users:
+  - root
+
+at_allowed_users:
+  - root
+
+cron_allow_file: "/etc/cron.allow"
+at_allow_file: "/etc/at.allow"
+
+cron_deny_file: "/etc/cron.deny"
+at_deny_file: "/etc/at.deny"
+
+cron_directories:
+  - /etc/cron.d
+  - /etc/cron.daily
+  - /etc/cron.hourly
+  - /etc/cron.weekly
+  - /etc/cron.monthly
