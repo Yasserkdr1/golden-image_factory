@@ -1,0 +1,98 @@
+---
+# =============================================================================
+# 16 — Crash Reporting Hardening
+# =============================================================================
+
+- name: "16 | Gather service facts"
+  ansible.builtin.service_facts:
+
+- name: "16 | Disable and stop Apport"
+  ansible.builtin.systemd_service:
+    name: apport
+    enabled: false
+    state: stopped
+  when:
+    - crash_reporting_disable_apport | bool
+    - "'apport.service' in ansible_facts.services"
+
+- name: "16 | Check whether Apport defaults file exists"
+  ansible.builtin.stat:
+    path: "{{ crash_reporting_apport_default_file }}"
+  register: crash_reporting_apport_file_status
+  when: crash_reporting_disable_apport | bool
+
+- name: "16 | Disable Apport in defaults file"
+  ansible.builtin.lineinfile:
+    path: "{{ crash_reporting_apport_default_file }}"
+    regexp: '^enabled='
+    line: 'enabled=0'
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - crash_reporting_disable_apport | bool
+    - crash_reporting_apport_file_status.stat.exists | default(false)
+
+- name: "16 | Create security limits directory"
+  ansible.builtin.file:
+    path: "{{ crash_reporting_limits_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: crash_reporting_disable_core_dumps | bool
+
+- name: "16 | Disable core dumps through security limits"
+  ansible.builtin.copy:
+    dest: "{{ crash_reporting_limits_file }}"
+    content: |
+      # Managed by Ansible — disable core dumps
+      * hard core 0
+    owner: root
+    group: root
+    mode: "0644"
+  when: crash_reporting_disable_core_dumps | bool
+
+- name: "16 | Create systemd coredump configuration directory"
+  ansible.builtin.file:
+    path: "{{ crash_reporting_coredump_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: crash_reporting_disable_core_dumps | bool
+
+- name: "16 | Disable systemd core dump storage"
+  ansible.builtin.copy:
+    dest: "{{ crash_reporting_coredump_file }}"
+    content: |
+      # Managed by Ansible — disable systemd core dumps
+      [Coredump]
+      Storage=none
+      ProcessSizeMax=0
+    owner: root
+    group: root
+    mode: "0644"
+  when: crash_reporting_disable_core_dumps | bool
+
+- name: "16 | Verify core dump security limit"
+  ansible.builtin.command:
+    cmd: grep -F "* hard core 0" "{{ crash_reporting_limits_file }}"
+  changed_when: false
+  when: crash_reporting_disable_core_dumps | bool
+
+- name: "16 | Read effective systemd coredump configuration"
+  ansible.builtin.command:
+    cmd: systemd-analyze cat-config systemd/coredump.conf
+  register: crash_reporting_coredump_configuration
+  changed_when: false
+  when: crash_reporting_disable_core_dumps | bool
+
+- name: "16 | Verify systemd coredump configuration"
+  ansible.builtin.assert:
+    that:
+      - "'Storage=none' in crash_reporting_coredump_configuration.stdout"
+      - "'ProcessSizeMax=0' in crash_reporting_coredump_configuration.stdout"
+    fail_msg: "The systemd core dump configuration is not correctly disabled."
+    success_msg: "Systemd core dump storage is disabled."
+  when: crash_reporting_disable_core_dumps | bool

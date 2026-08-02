@@ -25,3 +25,4 @@
     - cron_at_hardening
     - intrusion_detection_hardening
     - time_sync_hardening
+    - crash_reporting_hardening

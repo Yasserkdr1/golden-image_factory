@@ -1,0 +1,11 @@
+---
+crash_reporting_disable_apport: true
+crash_reporting_disable_core_dumps: true
+
+crash_reporting_apport_default_file: "/etc/default/apport"
+
+crash_reporting_limits_directory: "/etc/security/limits.d"
+crash_reporting_limits_file: "/etc/security/limits.d/99-hardening.conf"
+
+crash_reporting_coredump_directory: "/etc/systemd/coredump.conf.d"
+crash_reporting_coredump_file: "/etc/systemd/coredump.conf.d/99-hardening.conf"
