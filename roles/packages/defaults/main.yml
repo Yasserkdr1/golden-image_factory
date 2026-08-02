@@ -10,6 +10,7 @@ hardening_packages:
   - apparmor
   - apparmor-utils
   - apparmor-profiles
+  - apparmor-profiles-extra
   - rkhunter
   - fail2ban
   - rsyslog

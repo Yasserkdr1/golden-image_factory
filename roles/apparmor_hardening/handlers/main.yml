@@ -1,0 +1,10 @@
+---
+- name: Update GRUB
+  ansible.builtin.command:
+    cmd: update-grub
+  changed_when: true
+  notify: AppArmor reboot required
+
+- name: AppArmor reboot required
+  ansible.builtin.debug:
+    msg: "GRUB was updated. Reboot the machine to apply the AppArmor kernel parameters."

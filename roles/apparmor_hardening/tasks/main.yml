@@ -1,0 +1,93 @@
+---
+# =============================================================================
+# 07 — AppArmor Hardening
+# =============================================================================
+
+- name: "07 | Install AppArmor packages"
+  ansible.builtin.apt:
+    name: "{{ apparmor_packages }}"
+    state: present
+    update_cache: false
+
+- name: "07 | Backup GRUB configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ apparmor_grub_file }}"
+
+- name: "07 | Enable and start AppArmor service"
+  ansible.builtin.service:
+    name: apparmor
+    enabled: true
+    state: started
+
+- name: "07 | Read current GRUB kernel command line"
+  ansible.builtin.command:
+    cmd: grep '^GRUB_CMDLINE_LINUX=' "{{ apparmor_grub_file }}"
+  register: apparmor_grub_cmdline
+  changed_when: false
+  failed_when: false
+
+- name: "07 | Extract current GRUB kernel parameters"
+  ansible.builtin.set_fact:
+    apparmor_current_kernel_parameters: >-
+      {{
+        apparmor_grub_cmdline.stdout
+        | default('GRUB_CMDLINE_LINUX=""', true)
+        | regex_replace('^GRUB_CMDLINE_LINUX="', '')
+        | regex_replace('"$', '')
+        | split()
+      }}
+
+- name: "07 | Build hardened GRUB kernel parameters"
+  ansible.builtin.set_fact:
+    apparmor_final_kernel_parameters: >-
+      {{
+        apparmor_current_kernel_parameters
+        | union(apparmor_kernel_parameters)
+      }}
+
+- name: "07 | Enable AppArmor kernel parameters in GRUB"
+  ansible.builtin.lineinfile:
+    path: "{{ apparmor_grub_file }}"
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: >-
+      GRUB_CMDLINE_LINUX="{{ apparmor_final_kernel_parameters | join(' ') }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Update GRUB
+
+- name: "07 | Check selected AppArmor profiles"
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ apparmor_profiles_to_enforce }}"
+  loop_control:
+    label: "{{ item }}"
+  register: apparmor_profile_status
+  when:
+    - apparmor_enforce_profiles | bool
+    - apparmor_profiles_to_enforce | length > 0
+
+- name: "07 | Set selected AppArmor profiles to enforce mode"
+  ansible.builtin.command:
+    argv:
+      - aa-enforce
+      - "{{ item.item }}"
+  loop: "{{ apparmor_profile_status.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: apparmor_enforce_result
+  changed_when: >-
+    'enforce mode' in apparmor_enforce_result.stdout
+    and 'already' not in apparmor_enforce_result.stdout
+  when:
+    - apparmor_enforce_profiles | bool
+    - item.stat.exists | default(false)
+
+- name: "07 | Verify AppArmor service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active apparmor
+  register: apparmor_service_status
+  changed_when: false
+  failed_when: apparmor_service_status.stdout != "active"
