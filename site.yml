@@ -14,3 +14,5 @@
     - packages
     - pam_password_policy
     - mount_hardening
+    - ssh_hardening
+  
