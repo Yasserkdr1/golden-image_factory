@@ -1,0 +1,15 @@
+---
+additional_fixes_postfix_enabled: true
+additional_fixes_disable_rare_network_modules: true
+additional_fixes_secure_crontab: true
+additional_fixes_sysctl_enabled: true
+
+additional_fixes_postfix_file: "/etc/postfix/main.cf"
+
+additional_fixes_disabled_modules:
+  - dccp
+  - sctp
+  - rds
+  - tipc
+
+additional_fixes_modprobe_file: "/etc/modprobe.d/99-disable-rare-network.conf"

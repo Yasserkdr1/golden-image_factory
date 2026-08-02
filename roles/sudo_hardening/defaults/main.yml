@@ -1,0 +1,11 @@
+---
+sudo_hardening_directory: "/etc/sudoers.d"
+sudo_hardening_file: "/etc/sudoers.d/99-hardening"
+sudo_hardening_log_file: "/var/log/sudo.log"
+
+sudo_hardening_timestamp_timeout: 0
+sudo_hardening_use_pty: true
+sudo_hardening_env_reset: true
+
+sudo_hardening_secure_path: >-
+  /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin

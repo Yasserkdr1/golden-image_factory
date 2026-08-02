@@ -1,0 +1,104 @@
+---
+# =============================================================================
+# 20 — Additional Security Fixes
+# =============================================================================
+
+
+
+- name: "20 | Check whether Postfix is installed"
+  ansible.builtin.command:
+    cmd: dpkg-query -W -f=${Status} postfix
+  register: additional_fixes_postfix_package
+  changed_when: false
+  failed_when: false
+  when: additional_fixes_postfix_enabled | bool
+
+- name: "20 | Hide Postfix software information from SMTP banner"
+  ansible.builtin.lineinfile:
+    path: "{{ additional_fixes_postfix_file }}"
+    regexp: '^[#[:space:]]*smtpd_banner[[:space:]]*='
+    line: 'smtpd_banner = $myhostname ESMTP'
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart postfix
+  when:
+    - additional_fixes_postfix_enabled | bool
+    - "'install ok installed' in additional_fixes_postfix_package.stdout"
+
+- name: "20 | Disable Postfix VRFY command"
+  ansible.builtin.lineinfile:
+    path: "{{ additional_fixes_postfix_file }}"
+    regexp: '^[#[:space:]]*disable_vrfy_command[[:space:]]*='
+    line: 'disable_vrfy_command = yes'
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart postfix
+  when:
+    - additional_fixes_postfix_enabled | bool
+    - "'install ok installed' in additional_fixes_postfix_package.stdout"
+
+# -----------------------------------------------------------------------------
+# Rare network protocols
+# -----------------------------------------------------------------------------
+
+- name: "20 | Disable uncommon network protocol modules"
+  ansible.builtin.template:
+    src: 99-disable-rare-network.conf.j2
+    dest: "{{ additional_fixes_modprobe_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: additional_fixes_disable_rare_network_modules | bool
+
+- name: "20 | Check whether uncommon network modules are loaded"
+  ansible.builtin.command:
+    cmd: "lsmod"
+  register: additional_fixes_loaded_modules
+  changed_when: false
+  when: additional_fixes_disable_rare_network_modules | bool
+
+
+
+# -----------------------------------------------------------------------------
+# File permissions
+# -----------------------------------------------------------------------------
+
+- name: "20 | Restrict permissions on system crontab"
+  ansible.builtin.file:
+    path: /etc/crontab
+    state: file
+    owner: root
+    group: root
+    mode: "0600"
+  when: additional_fixes_secure_crontab | bool
+
+- name: "20 | Flush additional security handlers"
+  ansible.builtin.meta: flush_handlers
+
+# -----------------------------------------------------------------------------
+# Verification
+# -----------------------------------------------------------------------------
+
+- name: "20 | Verify Postfix SMTP banner"
+  ansible.builtin.command:
+    cmd: postconf -h smtpd_banner
+  register: additional_fixes_postfix_banner
+  changed_when: false
+  failed_when:
+    - additional_fixes_postfix_banner.rc != 0
+    - additional_fixes_postfix_banner.stdout != '$myhostname ESMTP'
+  when:
+    - additional_fixes_postfix_enabled | bool
+    - "'install ok installed' in additional_fixes_postfix_package.stdout"
+
+- name: "20 | Verify Postfix VRFY setting"
+  ansible.builtin.command:
+    cmd: postconf -h disable_vrfy_command
+  register: additional_fixes_postfix_vrfy
+  changed_when: false
+  failed_when: additional_fixes_postfix_vrfy.stdout != "yes"
+  when:
+    - additional_fixes_postfix_enabled | bool
+    - "'install ok installed' in additional_fixes_postfix_package.stdout"
