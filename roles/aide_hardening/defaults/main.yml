@@ -1,0 +1,20 @@
+---
+# Packages required for AIDE
+aide_packages:
+  - aide
+  - aide-common
+
+# Possible database locations on Ubuntu
+aide_database_file: "/var/lib/aide/aide.db"
+aide_new_database_file: "/var/lib/aide/aide.db.new"
+
+# Initialize the database only if it does not already exist
+aide_initialize_database: true
+
+# Run an integrity check after initialization
+aide_run_initial_check: true
+
+# Enable a daily integrity check
+aide_enable_daily_check: true
+
+aide_daily_script: "/etc/cron.daily/aide-hardening"

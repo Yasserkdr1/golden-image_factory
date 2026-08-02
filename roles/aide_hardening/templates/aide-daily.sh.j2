@@ -1,0 +1,10 @@
+#!/bin/sh
+
+LOG_DIR="/var/log/aide"
+LOG_FILE="${LOG_DIR}/aide-check.log"
+
+mkdir -p "${LOG_DIR}"
+
+/usr/bin/aide \
+  --config=/etc/aide/aide.conf \
+  --check >> "${LOG_FILE}" 2>&1
