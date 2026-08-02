@@ -16,4 +16,5 @@
     - mount_hardening
     - ssh_hardening
     - auditd_hardening
+    - apparmor_hardening
   

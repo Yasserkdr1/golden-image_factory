@@ -1,0 +1,17 @@
+---
+apparmor_packages:
+  - apparmor
+  - apparmor-utils
+  - apparmor-profiles
+  - apparmor-profiles-extra
+
+apparmor_grub_file: "/etc/default/grub"
+
+apparmor_kernel_parameters:
+  - "apparmor=1"
+  - "security=apparmor"
+
+apparmor_enforce_profiles: true
+
+apparmor_profiles_to_enforce: []
+  
