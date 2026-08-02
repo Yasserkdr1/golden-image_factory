@@ -1,0 +1,13 @@
+# =============================================================================
+# Managed by Ansible — Fail2ban SSH protection
+# =============================================================================
+
+[DEFAULT]
+bantime = {{ fail2ban_bantime }}
+findtime = {{ fail2ban_findtime }}
+maxretry = {{ fail2ban_maxretry }}
+
+[sshd]
+enabled = true
+port = {{ fail2ban_ssh_port }}
+backend = {{ fail2ban_backend }}

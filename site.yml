@@ -23,3 +23,4 @@
     - kernel_modules_hardening
     - logging_hardening
     - cron_at_hardening
+    - intrusion_detection_hardening

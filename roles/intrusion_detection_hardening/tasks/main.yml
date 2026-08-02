@@ -1,0 +1,109 @@
+---
+# =============================================================================
+# 14 — Intrusion Detection Hardening
+# =============================================================================
+
+- name: "14 | Install intrusion detection packages"
+  ansible.builtin.apt:
+    name: "{{ intrusion_detection_packages }}"
+    state: present
+    update_cache: false
+
+- name: "14 | Create fail2ban configuration directory"
+  ansible.builtin.file:
+    path: "{{ fail2ban_config_directory }}/jail.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "14 | Check whether fail2ban jail file exists"
+  ansible.builtin.stat:
+    path: "{{ fail2ban_jail_file }}"
+  register: fail2ban_jail_file_status
+
+- name: "14 | Backup existing fail2ban jail file"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ fail2ban_jail_file }}"
+  when: fail2ban_jail_file_status.stat.exists
+
+- name: "14 | Deploy fail2ban SSH jail"
+  ansible.builtin.template:
+    src: 99-sshd-hardening.local.j2
+    dest: "{{ fail2ban_jail_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart fail2ban
+
+- name: "14 | Validate fail2ban configuration"
+  ansible.builtin.command:
+    cmd: fail2ban-client -t
+  register: fail2ban_validation
+  changed_when: false
+
+- name: "14 | Enable and start fail2ban"
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    enabled: true
+    state: started
+
+- name: "14 | Configure daily rkhunter execution"
+  ansible.builtin.lineinfile:
+    path: "{{ rkhunter_default_file }}"
+    regexp: '^CRON_DAILY_RUN='
+    line: 'CRON_DAILY_RUN="true"'
+    owner: root
+    group: root
+    mode: "0640"
+  when: rkhunter_enable_daily_run | bool
+
+- name: "14 | Check whether rkhunter properties database exists"
+  ansible.builtin.stat:
+    path: /var/lib/rkhunter/db/rkhunter.dat
+  register: rkhunter_properties_database
+
+- name: "14 | Initialize rkhunter properties database"
+  ansible.builtin.command:
+    cmd: rkhunter --propupd
+  changed_when: true
+  when:
+    - rkhunter_update_properties | bool
+    - not rkhunter_properties_database.stat.exists
+
+- name: "14 | Flush fail2ban handler"
+  ansible.builtin.meta: flush_handlers
+
+- name: "14 | Verify fail2ban service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active fail2ban
+  register: fail2ban_service_status
+  changed_when: false
+  failed_when: fail2ban_service_status.stdout != "active"
+
+- name: "14 | Verify SSH jail is active"
+  ansible.builtin.command:
+    cmd: fail2ban-client status sshd
+  register: fail2ban_sshd_status
+  changed_when: false
+
+- name: "14 | Check whether Postfix is installed"
+  ansible.builtin.command:
+    cmd: dpkg-query -W -f='${Status}' postfix
+  register: postfix_package_status
+  changed_when: false
+  failed_when: false
+  when: remove_postfix | bool
+
+- name: "14 | Remove Postfix"
+  ansible.builtin.apt:
+    name: postfix
+    state: absent
+    purge: true
+    autoremove: true
+  when:
+    - remove_postfix | bool
+    - postfix_package_status.rc == 0
+    - "'install ok installed' in postfix_package_status.stdout"
