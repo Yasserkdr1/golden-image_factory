@@ -1,0 +1,13 @@
+---
+time_sync_service: "systemd-timesyncd"
+
+time_sync_dropin_directory: "/etc/systemd/timesyncd.conf.d"
+time_sync_config_file: "/etc/systemd/timesyncd.conf.d/99-hardening.conf"
+
+time_sync_ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+
+time_sync_fallback_ntp_servers:
+  - 2.pool.ntp.org
+  - 3.pool.ntp.org
