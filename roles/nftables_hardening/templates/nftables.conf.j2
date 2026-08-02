@@ -1,0 +1,51 @@
+#!/usr/sbin/nft -f
+
+# =============================================================================
+# Managed by Ansible — nftables Firewall
+# =============================================================================
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        # Allow loopback traffic
+        iifname "lo" accept
+
+        # Block spoofed loopback addresses
+        ip saddr 127.0.0.0/8 iifname != "lo" drop
+        ip6 saddr ::1 iifname != "lo" drop
+
+        # Allow established and related connections
+        ct state established,related accept
+
+        # Drop invalid packets
+        ct state invalid drop
+
+        # Allow limited IPv4 ping requests
+        ip protocol icmp icmp type echo-request limit rate {{ nftables_icmp_echo_rate }} accept
+
+        # Allow required ICMPv6 traffic
+        ip6 nexthdr icmpv6 accept
+
+        # Allow SSH with connection rate limiting
+        tcp dport {{ nftables_ssh_port }} ct state new limit rate {{ nftables_ssh_rate }} accept
+
+{% for port in nftables_allowed_tcp_ports %}
+        tcp dport {{ port }} ct state new accept
+{% endfor %}
+
+{% for port in nftables_allowed_udp_ports %}
+        udp dport {{ port }} accept
+{% endfor %}
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

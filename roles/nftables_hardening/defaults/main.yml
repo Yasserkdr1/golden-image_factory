@@ -1,0 +1,18 @@
+---
+nftables_packages:
+  - nftables
+
+nftables_config_file: "/etc/nftables.conf"
+
+nftables_disable_ufw: true
+
+nftables_ssh_port: 22
+
+nftables_icmp_echo_rate: "5/second"
+nftables_ssh_rate: "10/minute"
+
+# Additional TCP ports to allow.
+nftables_allowed_tcp_ports: []
+
+# Additional UDP ports to allow.
+nftables_allowed_udp_ports: []
