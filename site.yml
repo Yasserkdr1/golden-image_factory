@@ -18,3 +18,4 @@
     - auditd_hardening
     - apparmor_hardening
     - aide_hardening
+    - sysctl_hardening
