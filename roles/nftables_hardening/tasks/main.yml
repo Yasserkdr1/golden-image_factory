@@ -1,0 +1,86 @@
+---
+# =============================================================================
+# 10 — nftables Firewall Hardening
+# =============================================================================
+
+- name: "10 | Install nftables package"
+  ansible.builtin.apt:
+    name: "{{ nftables_packages }}"
+    state: present
+    update_cache: false
+
+- name: "10 | Check whether UFW is installed"
+  ansible.builtin.command:
+    cmd: dpkg-query -W -f='${Status}' ufw
+  register: nftables_ufw_package_status
+  changed_when: false
+  failed_when: false
+  when: nftables_disable_ufw | bool
+
+- name: "10 | Disable and stop UFW"
+  ansible.builtin.systemd_service:
+    name: ufw
+    enabled: false
+    state: stopped
+  when:
+    - nftables_disable_ufw | bool
+    - nftables_ufw_package_status.rc == 0
+    - "'install ok installed' in nftables_ufw_package_status.stdout"
+
+- name: "10 | Check whether nftables configuration exists"
+  ansible.builtin.stat:
+    path: "{{ nftables_config_file }}"
+  register: nftables_config_status
+
+- name: "10 | Backup existing nftables configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ nftables_config_file }}"
+  when: nftables_config_status.stat.exists
+
+- name: "10 | Deploy nftables configuration"
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: "{{ nftables_config_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+    validate: "/usr/sbin/nft -c -f %s"
+  notify: Reload nftables
+
+- name: "10 | Enable nftables service"
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+    masked: false
+
+- name: "10 | Apply pending nftables handler before service verification"
+  ansible.builtin.meta: flush_handlers
+
+- name: "10 | Ensure nftables service is running"
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: started
+    enabled: true
+
+- name: "10 | Verify nftables service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active nftables
+  register: nftables_service_status
+  changed_when: false
+  failed_when: nftables_service_status.stdout != "active"
+
+- name: "10 | Read active nftables ruleset"
+  ansible.builtin.command:
+    cmd: nft list ruleset
+  register: nftables_active_ruleset
+  changed_when: false
+
+- name: "10 | Verify firewall input chain exists"
+  ansible.builtin.assert:
+    that:
+      - "'chain input' in nftables_active_ruleset.stdout"
+      - "'policy drop' in nftables_active_ruleset.stdout"
+    fail_msg: "The nftables input chain or its drop policy is missing."
+    success_msg: "The nftables input chain is active with a drop policy."
