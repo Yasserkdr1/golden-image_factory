@@ -1,0 +1,76 @@
+---
+# =============================================================================
+# 12 — Logging Hardening
+# =============================================================================
+
+- name: "12 | Install logging packages"
+  ansible.builtin.apt:
+    name: "{{ logging_packages }}"
+    state: present
+    update_cache: false
+
+- name: "12 | Enable and start rsyslog"
+  ansible.builtin.systemd_service:
+    name: rsyslog
+    enabled: true
+    state: started
+
+- name: "12 | Create journald drop-in directory"
+  ansible.builtin.file:
+    path: "{{ journald_dropin_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "12 | Check whether journald hardening file exists"
+  ansible.builtin.stat:
+    path: "{{ journald_hardening_file }}"
+  register: journald_hardening_file_status
+
+- name: "12 | Backup existing journald hardening file"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ journald_hardening_file }}"
+  when: journald_hardening_file_status.stat.exists
+
+- name: "12 | Deploy journald hardening configuration"
+  ansible.builtin.template:
+    src: 99-hardening.conf.j2
+    dest: "{{ journald_hardening_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart systemd-journald
+
+- name: "12 | Ensure persistent journal directory exists"
+  ansible.builtin.file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "2755"
+  notify: Restart systemd-journald
+
+- name: "12 | Verify rsyslog service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active rsyslog
+  register: rsyslog_service_status
+  changed_when: false
+  failed_when: rsyslog_service_status.stdout != "active"
+
+- name: "12 | Read effective journald configuration"
+  ansible.builtin.command:
+    cmd: systemd-analyze cat-config systemd/journald.conf
+  register: journald_effective_configuration
+  changed_when: false
+
+- name: "12 | Verify journald hardening parameters"
+  ansible.builtin.assert:
+    that:
+      - "('Storage=' ~ journald_storage) in journald_effective_configuration.stdout"
+      - "('Compress=' ~ journald_compress) in journald_effective_configuration.stdout"
+      - "('ForwardToSyslog=' ~ journald_forward_to_syslog) in journald_effective_configuration.stdout"
+    fail_msg: "The journald hardening configuration is not active."
+    success_msg: "The journald hardening configuration is active."

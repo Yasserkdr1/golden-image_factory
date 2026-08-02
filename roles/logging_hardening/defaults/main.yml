@@ -1,0 +1,12 @@
+---
+logging_packages:
+  - rsyslog
+
+journald_dropin_directory: "/etc/systemd/journald.conf.d"
+journald_hardening_file: "/etc/systemd/journald.conf.d/99-hardening.conf"
+
+journald_storage: "persistent"
+journald_compress: "yes"
+journald_forward_to_syslog: "yes"
+
+#logging_manage_permissions: true
