@@ -1,0 +1,38 @@
+---
+# =============================================================================
+# 17 — GRUB Hardening
+# =============================================================================
+
+- name: "17 | Configure GRUB password protection"
+  when: grub_password_enabled | bool
+  block:
+
+    - name: "17 | Verify GRUB password hash is provided"
+      ansible.builtin.assert:
+        that:
+          - grub_password_hash | length > 50
+          - grub_password_hash.startswith('grub.pbkdf2.sha512.')
+        fail_msg: "A valid GRUB password hash must be provided through GRUB_PASSWORD_HASH."
+      no_log: true
+
+    - name: "17 | Check whether GRUB configuration exists"
+      ansible.builtin.stat:
+        path: "{{ grub_custom_file }}"
+      register: grub_custom_file_status
+
+    - name: "17 | Backup existing GRUB configuration"
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/tasks/backup_file.yml"
+      vars:
+        backup_source: "{{ grub_custom_file }}"
+      when: grub_custom_file_status.stat.exists
+
+    - name: "17 | Deploy GRUB password configuration"
+      ansible.builtin.template:
+        src: 40_custom_hardening.j2
+        dest: "{{ grub_custom_file }}"
+        owner: root
+        group: root
+        mode: "0700"
+      notify: Update GRUB
+      no_log: true
