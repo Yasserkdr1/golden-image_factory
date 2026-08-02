@@ -1,0 +1,6 @@
+---
+- name: Update initramfs
+  ansible.builtin.command:
+    cmd: update-initramfs -u
+  changed_when: true
+  when: kernel_modules_update_initramfs | bool

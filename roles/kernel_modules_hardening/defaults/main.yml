@@ -1,0 +1,12 @@
+---
+kernel_modules_config_file: "/etc/modprobe.d/99-hardening-blacklist.conf"
+
+kernel_modules_disabled:
+  - cramfs
+  - freevxfs
+  - hfs
+  - hfsplus
+  - jffs2
+  - usb_storage
+
+kernel_modules_update_initramfs: true

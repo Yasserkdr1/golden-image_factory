@@ -19,4 +19,5 @@
     #- apparmor_hardening
     #- aide_hardening
     #- sysctl_hardening
-    - nftables_hardening
+    #- nftables_hardening
+    - kernel_modules_hardening
