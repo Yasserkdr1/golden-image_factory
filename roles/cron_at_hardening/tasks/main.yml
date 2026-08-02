@@ -1,0 +1,98 @@
+---
+# =============================================================================
+# 13 — Cron and At Hardening
+# =============================================================================
+
+- name: "13 | Install cron and at packages"
+  ansible.builtin.apt:
+    name: "{{ cron_at_packages }}"
+    state: present
+    update_cache: false
+
+- name: "13 | Enable and start cron service"
+  ansible.builtin.systemd_service:
+    name: cron
+    enabled: true
+    state: started
+
+- name: "13 | Enable and start at service"
+  ansible.builtin.systemd_service:
+    name: atd
+    enabled: true
+    state: started
+
+- name: "13 | Configure allowed cron users"
+  ansible.builtin.copy:
+    dest: "{{ cron_allow_file }}"
+    content: |
+      {% for user in cron_allowed_users %}
+      {{ user }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: "13 | Configure allowed at users"
+  ansible.builtin.copy:
+    dest: "{{ at_allow_file }}"
+    content: |
+      {% for user in at_allowed_users %}
+      {{ user }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: "13 | Remove cron deny file"
+  ansible.builtin.file:
+    path: "{{ cron_deny_file }}"
+    state: absent
+
+- name: "13 | Remove at deny file"
+  ansible.builtin.file:
+    path: "{{ at_deny_file }}"
+    state: absent
+
+- name: "13 | Harden cron directory permissions"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop: "{{ cron_directories }}"
+
+- name: "13 | Verify cron service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active cron
+  register: cron_service_status
+  changed_when: false
+  failed_when: cron_service_status.stdout != "active"
+
+- name: "13 | Verify at service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active atd
+  register: at_service_status
+  changed_when: false
+  failed_when: at_service_status.stdout != "active"
+
+- name: "13 | Verify cron and at allow files"
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ cron_allow_file }}"
+    - "{{ at_allow_file }}"
+  register: cron_at_allow_files
+
+- name: "13 | Assert cron and at allow file permissions"
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.pw_name == "root"
+      - item.stat.gr_name == "root"
+      - item.stat.mode == "0600"
+    fail_msg: "{{ item.item }} is not correctly secured."
+    success_msg: "{{ item.item }} is correctly secured."
+  loop: "{{ cron_at_allow_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
