@@ -1,0 +1,39 @@
+---
+# =============================================================================
+# 11 — Kernel Modules Hardening
+# =============================================================================
+
+- name: "11 | Check whether module blacklist configuration exists"
+  ansible.builtin.stat:
+    path: "{{ kernel_modules_config_file }}"
+  register: kernel_modules_config_status
+
+- name: "11 | Backup existing module blacklist configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ kernel_modules_config_file }}"
+  when: kernel_modules_config_status.stat.exists
+
+- name: "11 | Deploy kernel module blacklist configuration"
+  ansible.builtin.template:
+    src: 99-hardening-blacklist.conf.j2
+    dest: "{{ kernel_modules_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Update initramfs
+
+- name: "11 | Verify module blacklist configuration"
+  ansible.builtin.command:
+    cmd: modprobe --showconfig
+  register: kernel_modules_modprobe_config
+  changed_when: false
+
+- name: "11 | Verify disabled modules are configured"
+  ansible.builtin.assert:
+    that:
+      - "('install ' + item + ' /bin/false') in kernel_modules_modprobe_config.stdout"
+    fail_msg: "Module {{ item }} is not correctly disabled."
+    success_msg: "Module {{ item }} is disabled."
+  loop: "{{ kernel_modules_disabled }}"

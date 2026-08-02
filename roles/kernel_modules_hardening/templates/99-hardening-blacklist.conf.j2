@@ -1,0 +1,9 @@
+# =============================================================================
+# Managed by Ansible — Disabled kernel modules
+# =============================================================================
+
+{% for module in kernel_modules_disabled %}
+install {{ module }} /bin/false
+blacklist {{ module }}
+
+{% endfor %}
