@@ -11,22 +11,22 @@
         group: root
         mode: "0700"
   roles:
-    #- packages
-    #- pam_password_policy
-    #- mount_hardening
-    #- ssh_hardening
-    #- auditd_hardening
-    #- apparmor_hardening
-    #- aide_hardening
-    #- sysctl_hardening
-    #- nftables_hardening
-    #- kernel_modules_hardening
-    #- logging_hardening
-    #- cron_at_hardening
-    #- intrusion_detection_hardening
-    #- time_sync_hardening
-    #- crash_reporting_hardening
-    #- grub_hardening
-    #- process_accounting_hardening
-    #- sudo_hardening
+    - packages
+    - pam_password_policy
+    - mount_hardening
+    - ssh_hardening
+    - auditd_hardening
+    - apparmor_hardening
+    - aide_hardening
+    - sysctl_hardening
+    - nftables_hardening
+    - kernel_modules_hardening
+    - logging_hardening
+    - cron_at_hardening
+    - intrusion_detection_hardening
+    - time_sync_hardening
+    - crash_reporting_hardening
+    - grub_hardening
+    - process_accounting_hardening
+    - sudo_hardening
     - additional_fixes
