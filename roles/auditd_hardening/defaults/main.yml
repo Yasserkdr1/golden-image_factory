@@ -1,0 +1,9 @@
+---
+auditd_rules_file: "/etc/audit/rules.d/99-hardening.rules"
+
+auditd_log_format: "ENRICHED"
+auditd_max_log_file: 30
+auditd_max_log_file_action: "ROTATE"
+
+
+auditd_enabled_mode: 2
