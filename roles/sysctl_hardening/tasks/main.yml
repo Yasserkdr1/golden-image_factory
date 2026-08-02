@@ -1,0 +1,31 @@
+---
+# =============================================================================
+# 09 — Kernel and Network Sysctl Hardening
+# =============================================================================
+
+- name: "09 | Check whether sysctl hardening file exists"
+  ansible.builtin.stat:
+    path: "{{ sysctl_hardening_file }}"
+  register: sysctl_hardening_file_status
+
+- name: "09 | Backup existing sysctl hardening file"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ sysctl_hardening_file }}"
+  when: sysctl_hardening_file_status.stat.exists
+
+- name: "09 | Deploy hardened sysctl configuration"
+  ansible.builtin.template:
+    src: 99-hardening.conf.j2
+    dest: "{{ sysctl_hardening_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply sysctl configuration
+
+- name: "09 | Verify sysctl configuration syntax"
+  ansible.builtin.command:
+    cmd: "sysctl -p {{ sysctl_hardening_file }}"
+  register: sysctl_validation
+  changed_when: false
