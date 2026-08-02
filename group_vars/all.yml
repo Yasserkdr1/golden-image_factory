@@ -2,3 +2,5 @@
 hardening_backup_dir: /var/backups/hardening
 target_os: Ubuntu
 target_version: "24.04"
+grub_password_enabled: true
+grub_password_hash: "{{ lookup('ansible.builtin.env', 'GRUB_PASSWORD_HASH') }}"

@@ -6,3 +6,4 @@
 *.pem
 *.key
 inventory/hosts.ini
+.env.*
