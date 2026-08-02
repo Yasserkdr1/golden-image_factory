@@ -20,4 +20,5 @@
     #- aide_hardening
     #- sysctl_hardening
     #- nftables_hardening
-    - kernel_modules_hardening
+    #- kernel_modules_hardening
+    - logging_hardening
