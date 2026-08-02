@@ -1,0 +1,88 @@
+---
+# =============================================================================
+# 03 — Auditd Hardening
+# =============================================================================
+
+- name: "03 | Install auditd package"
+  ansible.builtin.apt:
+    name: auditd
+    state: present
+    update_cache: false
+
+- name: "03 | Backup auditd configuration"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: /etc/audit/auditd.conf
+
+- name: "03 | Ensure audit rules directory exists"
+  ansible.builtin.file:
+    path: /etc/audit/rules.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: "03 | Check whether audit hardening rules already exist"
+  ansible.builtin.stat:
+    path: "{{ auditd_rules_file }}"
+  register: auditd_rules_status
+
+- name: "03 | Backup existing audit hardening rules"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: "{{ auditd_rules_file }}"
+  when: auditd_rules_status.stat.exists
+
+- name: "03 | Configure audit log format"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: '^\s*log_format\s*='
+    line: "log_format = {{ auditd_log_format }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart auditd
+
+- name: "03 | Configure maximum audit log file size"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: '^\s*max_log_file\s*='
+    line: "max_log_file = {{ auditd_max_log_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart auditd
+
+- name: "03 | Configure audit log rotation action"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: '^\s*max_log_file_action\s*='
+    line: "max_log_file_action = {{ auditd_max_log_file_action }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart auditd
+
+- name: "03 | Secure auditd configuration permissions"
+  ansible.builtin.file:
+    path: /etc/audit/auditd.conf
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: "03 | Deploy audit hardening rules"
+  ansible.builtin.template:
+    src: hardening.rules.j2
+    dest: "{{ auditd_rules_file }}"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Load audit rules
+
+- name: "03 | Enable and start auditd service"
+  ansible.builtin.service:
+    name: auditd
+    enabled: true
+    state: started

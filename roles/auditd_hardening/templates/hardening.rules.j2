@@ -1,0 +1,33 @@
+-D
+-b 8192
+-f 1
+
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d/ -p wa -k scope
+-w /var/log/sudo.log -p wa -k actions
+
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock/ -p wa -k logins
+-w /var/log/audit/ -p r -k auditlog
+
+-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time-change
+-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -k time-change
+
+-w /etc/hosts -p wa -k network
+-w /etc/network/ -p wa -k network
+
+-w /etc/apparmor/ -p wa -k MAC-policy
+-w /etc/apparmor.d/ -p wa -k MAC-policy
+
+-a always,exit -F arch=b64 -S execve -C uid!=euid -F euid=0 -k privileged
+-a always,exit -F arch=b32 -S execve -C uid!=euid -F euid=0 -k privileged
+
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules
+-a always,exit -F arch=b32 -S init_module,finit_module,delete_module -k modules
+
+-e {{ auditd_enabled_mode }}
