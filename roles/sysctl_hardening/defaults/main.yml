@@ -42,3 +42,4 @@ sysctl_hardening_kernel:
   kernel.perf_event_paranoid: 2
   dev.tty.ldisc_autoload: 0
   net.core.bpf_jit_harden: 2
+  kernel.perf_event_paranoid: 3kernel.perf_event_paranoid: 3

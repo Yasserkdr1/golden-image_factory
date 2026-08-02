@@ -1,0 +1,9 @@
+# =============================================================================
+# Managed by Ansible — disable uncommon network protocols
+# =============================================================================
+
+{% for module in additional_fixes_disabled_modules %}
+install {{ module }} /bin/false
+blacklist {{ module }}
+
+{% endfor %}

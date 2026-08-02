@@ -27,4 +27,6 @@
     #- time_sync_hardening
     #- crash_reporting_hardening
     #- grub_hardening
-    - process_accounting_hardening
+    #- process_accounting_hardening
+    #- sudo_hardening
+    - additional_fixes

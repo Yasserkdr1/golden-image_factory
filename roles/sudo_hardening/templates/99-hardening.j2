@@ -1,0 +1,13 @@
+# =============================================================================
+# Managed by Ansible — sudo hardening
+# =============================================================================
+
+Defaults logfile="{{ sudo_hardening_log_file }}"
+Defaults timestamp_timeout={{ sudo_hardening_timestamp_timeout }}
+{% if sudo_hardening_use_pty | bool %}
+Defaults use_pty
+{% endif %}
+{% if sudo_hardening_env_reset | bool %}
+Defaults env_reset
+{% endif %}
+Defaults secure_path="{{ sudo_hardening_secure_path }}"
