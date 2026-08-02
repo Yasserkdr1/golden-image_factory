@@ -1,0 +1,10 @@
+---
+process_accounting_packages:
+  - acct
+  - sysstat
+
+process_accounting_acct_service: "acct"
+process_accounting_sysstat_service: "sysstat"
+
+process_accounting_sysstat_defaults_file: "/etc/default/sysstat"
+process_accounting_enable_sysstat_collection: true

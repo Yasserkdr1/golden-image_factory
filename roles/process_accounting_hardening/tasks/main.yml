@@ -1,0 +1,50 @@
+---
+# =============================================================================
+# 18 — Process Accounting Hardening
+# =============================================================================
+
+- name: "18 | Install process accounting packages"
+  ansible.builtin.apt:
+    name: "{{ process_accounting_packages }}"
+    state: present
+    update_cache: false
+
+- name: "18 | Enable sysstat data collection"
+  ansible.builtin.lineinfile:
+    path: "{{ process_accounting_sysstat_defaults_file }}"
+    regexp: '^ENABLED='
+    line: 'ENABLED="true"'
+    owner: root
+    group: root
+    mode: "0644"
+  when: process_accounting_enable_sysstat_collection | bool
+  notify: Restart sysstat
+
+- name: "18 | Enable and start acct service"
+  ansible.builtin.systemd_service:
+    name: "{{ process_accounting_acct_service }}"
+    enabled: true
+    state: started
+
+- name: "18 | Enable and start sysstat service"
+  ansible.builtin.systemd_service:
+    name: "{{ process_accounting_sysstat_service }}"
+    enabled: true
+    state: started
+
+- name: "18 | Flush process accounting handlers"
+  ansible.builtin.meta: flush_handlers
+
+- name: "18 | Verify acct service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active "{{ process_accounting_acct_service }}"
+  register: process_accounting_acct_status
+  changed_when: false
+  failed_when: process_accounting_acct_status.stdout != "active"
+
+- name: "18 | Verify sysstat service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active "{{ process_accounting_sysstat_service }}"
+  register: process_accounting_sysstat_status
+  changed_when: false
+  failed_when: process_accounting_sysstat_status.stdout != "active"

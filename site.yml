@@ -26,4 +26,5 @@
     #- intrusion_detection_hardening
     #- time_sync_hardening
     #- crash_reporting_hardening
-    - grub_hardening
+    #- grub_hardening
+    - process_accounting_hardening
