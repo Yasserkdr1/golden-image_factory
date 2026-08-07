@@ -22,3 +22,4 @@ hardening_packages:
   - apt-listchanges
   - apt-show-versions
   - lynis
+  - openscap-scanner
