@@ -1,2 +1,2 @@
 [servers]
-server1 ansible_host=192.168.X.X ansible_user=User
+server1 ansible_host=127.0.0.1 ansible_user=admin

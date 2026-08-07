@@ -1,0 +1,422 @@
+---
+# =============================================================================
+# Golden Image — Security Validation Tests
+# =============================================================================
+
+- name: "Validate Golden Image security controls"
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    image_platform: "virtualbox"
+    expected_admin_user: "admin"
+
+    expected_sysctl:
+      fs.protected_fifos: "2"
+      fs.protected_hardlinks: "1"
+      fs.protected_symlinks: "1"
+      fs.suid_dumpable: "0"
+      kernel.dmesg_restrict: "1"
+      kernel.kptr_restrict: "2"
+      kernel.perf_event_paranoid: "3"
+      kernel.randomize_va_space: "2"
+      kernel.unprivileged_bpf_disabled: "1"
+      kernel.yama.ptrace_scope: "1"
+      net.ipv4.ip_forward: "0"
+      net.ipv4.conf.all.accept_redirects: "0"
+      net.ipv4.conf.default.accept_redirects: "0"
+      net.ipv4.tcp_syncookies: "1"
+
+  pre_tasks:
+    - name: "00 | Load platform variables"
+      ansible.builtin.include_vars:
+        file: "vars/{{ image_platform }}.yml"
+      tags:
+        - always
+
+  tasks:
+    # =========================================================================
+    # 01 — SSH
+    # =========================================================================
+
+    - name: "01 | Read effective SSH configuration"
+      ansible.builtin.command:
+        cmd: sshd -T
+      register: ssh_configuration
+      changed_when: false
+
+    - name: "01 | Verify SSH hardening"
+      ansible.builtin.assert:
+        that:
+          - "'permitrootlogin no' in ssh_configuration.stdout_lines"
+          - "'permitemptypasswords no' in ssh_configuration.stdout_lines"
+          - "'x11forwarding no' in ssh_configuration.stdout_lines"
+          - "'hostbasedauthentication no' in ssh_configuration.stdout_lines"
+          - "'ignorerhosts yes' in ssh_configuration.stdout_lines"
+        fail_msg: "One or more SSH security settings are missing."
+
+    # =========================================================================
+    # 02 — Mount options
+    # =========================================================================
+
+    - name: "02 | Read hardened mount options"
+      ansible.builtin.command:
+        cmd: "findmnt -rn --target {{ item.key }} -o OPTIONS"
+      loop: "{{ required_mount_options | dict2items }}"
+      register: mount_option_results
+      changed_when: false
+
+    - name: "02 | Verify hardened mount options"
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.item.value
+            | difference(item.stdout.split(','))
+            | length == 0
+        fail_msg: >-
+          Invalid options for {{ item.item.key }}.
+          Required={{ item.item.value | join(',') }}
+          Actual={{ item.stdout }}
+        quiet: true
+      loop: "{{ mount_option_results.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: "02 | Read proc mount options"
+      ansible.builtin.command:
+        cmd: findmnt -rn --target /proc -o OPTIONS
+      register: proc_mount_options
+      changed_when: false
+
+    - name: "02 | Verify proc hidepid protection"
+      ansible.builtin.assert:
+        that:
+          - >-
+            'hidepid=2' in proc_mount_options.stdout.split(',')
+            or 'hidepid=invisible' in proc_mount_options.stdout.split(',')
+        fail_msg: >-
+          /proc hidepid protection is missing.
+          Actual options: {{ proc_mount_options.stdout }}
+
+    # =========================================================================
+    # 03 — Sysctl
+    # =========================================================================
+
+    - name: "03 | Read sysctl values"
+      ansible.builtin.command:
+        cmd: "sysctl -n {{ item.key }}"
+      loop: "{{ expected_sysctl | dict2items }}"
+      register: sysctl_results
+      changed_when: false
+
+    - name: "03 | Verify sysctl values"
+      ansible.builtin.assert:
+        that:
+          - item.stdout | trim == item.item.value
+        fail_msg: >-
+          Invalid sysctl {{ item.item.key }}:
+          expected={{ item.item.value }},
+          actual={{ item.stdout | trim }}
+        quiet: true
+      loop: "{{ sysctl_results.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    # =========================================================================
+    # 04 — nftables
+    # =========================================================================
+
+    - name: "04 | Validate nftables configuration"
+      ansible.builtin.command:
+        cmd: nft --check --file /etc/nftables.conf
+      changed_when: false
+
+    - name: "04 | Read active nftables rules"
+      ansible.builtin.command:
+        cmd: nft list ruleset
+      register: nft_rules
+      changed_when: false
+
+    - name: "04 | Verify nftables protections"
+      ansible.builtin.assert:
+        that:
+          - "'table inet' in nft_rules.stdout"
+          - "'hook input' in nft_rules.stdout"
+          - "'policy drop' in nft_rules.stdout"
+          - "'ct state established,related accept' in nft_rules.stdout"
+        fail_msg: "Required nftables protections are missing."
+
+    # =========================================================================
+    # 05 — Fail2ban
+    # =========================================================================
+
+    - name: "05 | Validate Fail2ban configuration"
+      ansible.builtin.command:
+        cmd: fail2ban-client -t
+      changed_when: false
+
+    - name: "05 | Read Fail2ban status"
+      ansible.builtin.command:
+        cmd: fail2ban-client status
+      register: fail2ban_status
+      changed_when: false
+
+    - name: "05 | Verify SSH jail"
+      ansible.builtin.assert:
+        that:
+          - "'sshd' in fail2ban_status.stdout"
+        fail_msg: "Fail2ban sshd jail is not active."
+
+    - name: "05 | Read SSH jail status"
+      ansible.builtin.command:
+        cmd: fail2ban-client status sshd
+      changed_when: false
+
+    # =========================================================================
+    # 06 — Auditd
+    # =========================================================================
+
+    - name: "06 | Read audit subsystem status"
+      ansible.builtin.command:
+        cmd: auditctl -s
+      register: audit_status
+      changed_when: false
+
+    - name: "06 | Verify audit subsystem"
+      ansible.builtin.assert:
+        that:
+          - audit_status.stdout is search('enabled\\s+[12]')
+        fail_msg: "Audit subsystem is not enabled."
+
+    - name: "06 | Read active audit rules"
+      ansible.builtin.command:
+        cmd: auditctl -l
+      register: audit_rules
+      changed_when: false
+
+    - name: "06 | Verify audit rules are loaded"
+      ansible.builtin.assert:
+        that:
+          - audit_rules.stdout_lines | length > 5
+        fail_msg: "Too few audit rules are loaded."
+
+    # =========================================================================
+    # 07 — AppArmor
+    # =========================================================================
+
+    - name: "07 | Read AppArmor status"
+      ansible.builtin.command:
+        cmd: aa-status
+      register: apparmor_status
+      changed_when: false
+
+    - name: "07 | Verify AppArmor"
+      ansible.builtin.assert:
+        that:
+          - "'apparmor module is loaded' in apparmor_status.stdout"
+          - apparmor_status.stdout is search('[1-9][0-9]* profiles are loaded')
+        fail_msg: "AppArmor is not correctly enabled."
+
+    # =========================================================================
+    # 08 — GRUB
+    # =========================================================================
+
+    - name: "08 | Validate GRUB script"
+      ansible.builtin.command:
+        cmd: grub-script-check /boot/grub/grub.cfg
+      changed_when: false
+
+    - name: "08 | Verify GRUB superuser"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -Eq
+          - "^set superusers=\"{{ expected_admin_user }}\"$"
+          - /boot/grub/grub.cfg
+      changed_when: false
+
+    - name: "08 | Verify GRUB password"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -Eq
+          - "^password_pbkdf2[[:space:]]+{{ expected_admin_user }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
+          - /boot/grub/grub.cfg
+      changed_when: false
+
+    # =========================================================================
+    # 09 — PAM and passwords
+    # =========================================================================
+
+    - name: "09 | Verify PAM password history module"
+      ansible.builtin.command:
+        cmd: grep -Eq '^[[:space:]]*password[[:space:]].*pam_pwhistory\.so' /etc/pam.d/common-password
+      changed_when: false
+
+    - name: "09 | Read password history value"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          awk -F= '
+            /^[[:space:]]*remember[[:space:]]*=/ {
+              gsub(/[[:space:]]/, "", $2)
+              print $2
+            }
+          ' /etc/security/pwhistory.conf |
+          tail -n 1
+        executable: /bin/bash
+      register: password_history_value
+      changed_when: false
+
+    - name: "09 | Verify password history value"
+      ansible.builtin.assert:
+        that:
+          - password_history_value.stdout | trim is match('^[0-9]+$')
+          - password_history_value.stdout | int >= 5
+        fail_msg: >-
+          Password history is missing or lower than 5.
+          Actual value: {{ password_history_value.stdout | default('missing') }}
+
+    - name: "09 | Verify faillock configuration"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          grep -RhsE '^[^#]*pam_faillock\.so' \
+            /etc/pam.d/common-auth \
+            /etc/pam.d/common-account
+        executable: /bin/bash
+      register: faillock_configuration
+      changed_when: false
+      failed_when: faillock_configuration.stdout | trim | length == 0
+
+    - name: "09 | Read minimum password length"
+      ansible.builtin.shell:
+        cmd: |
+          cat /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf 2>/dev/null \
+            | awk -F= '/^[[:space:]]*minlen[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); v=$2} END{print v}'
+      args:
+        executable: /bin/bash
+      register: password_minimum_length
+      changed_when: false
+
+    - name: "09 | Verify minimum password length"
+      ansible.builtin.assert:
+        that:
+          - password_minimum_length.stdout | trim is match('^[0-9]+$')
+          - password_minimum_length.stdout | int >= 14
+        fail_msg: >-
+          Password minimum length is missing or lower than 14.
+          Actual value: {{ password_minimum_length.stdout | default('missing') }}
+        success_msg: >-
+          Password minimum length validated: {{ password_minimum_length.stdout }}
+    # =========================================================================
+    # 10 — AIDE
+    # =========================================================================
+
+    - name: "10 | Verify AIDE configuration file exists"
+      ansible.builtin.stat:
+        path: /etc/aide/aide.conf
+      register: aide_configuration_file
+
+    - name: "10 | Assert AIDE configuration file exists"
+      ansible.builtin.assert:
+        that:
+          - aide_configuration_file.stat.exists
+          - aide_configuration_file.stat.isreg
+        fail_msg: "/etc/aide/aide.conf is missing."
+
+    - name: "10 | Verify AIDE configuration"
+      ansible.builtin.command:
+        argv:
+          - aide
+          - --config=/etc/aide/aide.conf
+          - --config-check
+      changed_when: false
+
+    - name: "10 | Check uncompressed AIDE database"
+      ansible.builtin.stat:
+        path: /var/lib/aide/aide.db
+      register: aide_database
+
+    - name: "10 | Check compressed AIDE database"
+      ansible.builtin.stat:
+        path: /var/lib/aide/aide.db.gz
+      register: aide_database_gzip
+
+    - name: "10 | Verify AIDE database exists"
+      ansible.builtin.assert:
+        that:
+          - aide_database.stat.exists or aide_database_gzip.stat.exists
+        fail_msg: >-
+          AIDE database is missing.
+          Expected /var/lib/aide/aide.db
+          or /var/lib/aide/aide.db.gz.
+
+    # =========================================================================
+    # 11 — Core dumps
+    # =========================================================================
+
+    - name: "11 | Verify core dump limit"
+      ansible.builtin.command:
+        cmd: grep -Eq '^[*][[:space:]]+hard[[:space:]]+core[[:space:]]+0$' /etc/security/limits.d/99-hardening.conf
+      changed_when: false
+
+    - name: "11 | Read systemd coredump configuration"
+      ansible.builtin.command:
+        cmd: systemd-analyze cat-config systemd/coredump.conf
+      register: coredump_configuration
+      changed_when: false
+
+    - name: "11 | Verify core dumps are disabled"
+      ansible.builtin.assert:
+        that:
+          - coredump_configuration.stdout is search('Storage=none')
+          - coredump_configuration.stdout is search('ProcessSizeMax=0')
+        fail_msg: "Core dumps are not fully disabled."
+
+    # =========================================================================
+    # 12 — Critical permissions
+    # =========================================================================
+
+    - name: "12 | Read critical file permissions"
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop:
+        - path: /etc/passwd
+          mode: "0644"
+        - path: /etc/group
+          mode: "0644"
+        - path: /etc/shadow
+          mode: "0640"
+        - path: /etc/gshadow
+          mode: "0640"
+        - path: /etc/sudoers
+          mode: "0440"
+      register: critical_files
+
+    - name: "12 | Verify critical file permissions"
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == "root"
+          - item.stat.mode == item.item.mode
+        fail_msg: >-
+          Invalid permissions for {{ item.item.path }}:
+          expected={{ item.item.mode }},
+          actual={{ item.stat.mode | default('missing') }}
+        quiet: true
+      loop: "{{ critical_files.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    # =========================================================================
+    # 13 — Summary
+    # =========================================================================
+
+    - name: "13 | Security test summary"
+      ansible.builtin.debug:
+        msg:
+          - "Security tests passed."
+          - "Platform: {{ platform_name }}"
+          - "SSH, mounts, sysctl, firewall and security services validated."

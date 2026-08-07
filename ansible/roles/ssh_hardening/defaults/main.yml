@@ -5,7 +5,7 @@ ssh_dropin_file: "/etc/ssh/sshd_config.d/00-hardening.conf"
 
 # Authentication
 ssh_permit_root_login: "no"
-ssh_password_authentication: "yes"
+ssh_password_authentication: "no"
 ssh_permit_empty_passwords: "no"
 ssh_permit_user_environment: "no"
 ssh_ignore_rhosts: "yes"

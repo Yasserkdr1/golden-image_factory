@@ -1,0 +1,100 @@
+#cloud-config
+autoinstall:
+  version: 1
+
+  identity:
+    hostname: ubuntu-golden
+    username: admin
+    password: "$6$WvYJz0tf.QdbzJr5$8OVa94GOJ93k8kgbnansysV/T5pI9W.OFgSdAd4rDxP2FrluhICmOIjZCTiCbUvr.be0IbBmu.FTeI17Qt6yq1"
+
+  ssh:
+    install-server: true
+    authorized-keys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE48rr5fDYv6br1GZ5sNwIT/N2iPam1tkualmxdaYQNl golden-image-build
+
+  storage:
+    swap:
+      size: 0
+
+    config:
+      - type: disk
+        id: disk0
+        match:
+          size: largest
+        ptable: gpt
+        wipe: superblock-recursive
+        grub_device: true
+
+      - type: partition
+        id: partition-boot
+        device: disk0
+        size: 1M
+        flag: bios_grub
+        number: 1
+
+      - type: partition
+        id: partition-root
+        device: disk0
+        size: 8G
+        number: 2
+
+      - type: format
+        id: format-root
+        volume: partition-root
+        fstype: ext4
+
+      - type: mount
+        id: mount-root
+        device: format-root
+        path: /
+
+      - type: partition
+        id: partition-var
+        device: disk0
+        size: 5G
+        number: 3
+
+      - type: format
+        id: format-var
+        volume: partition-var
+        fstype: ext4
+
+      - type: mount
+        id: mount-var
+        device: format-var
+        path: /var
+
+      - type: partition
+        id: partition-home
+        device: disk0
+        size: 4G
+        number: 4
+
+      - type: format
+        id: format-home
+        volume: partition-home
+        fstype: ext4
+
+      - type: mount
+        id: mount-home
+        device: format-home
+        path: /home
+
+      - type: partition
+        id: partition-tmp
+        device: disk0
+        size: -1
+        number: 5
+
+      - type: format
+        id: format-tmp
+        volume: partition-tmp
+        fstype: ext4
+
+      - type: mount
+        id: mount-tmp
+        device: format-tmp
+        path: /tmp
+
+  packages:
+    - openssh-server

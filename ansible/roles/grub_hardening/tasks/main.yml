@@ -3,16 +3,64 @@
 # 17 — GRUB Hardening
 # =============================================================================
 
+- name: "17 | Remove autoinstall parameters from GRUB defaults"
+  ansible.builtin.replace:
+    path: /etc/default/grub
+    regexp: '(?:autoinstall\s*)|(?:ds=nocloud(?:-net)?;s=[^"''\s]+\s*)'
+    replace: ""
+  notify: Update GRUB
+
+- name: "17 | Check whether GRUB Linux generator exists"
+  ansible.builtin.stat:
+    path: /etc/grub.d/10_linux
+  register: grub_linux_generator
+
+- name: "17 | Verify GRUB Linux generator exists"
+  ansible.builtin.assert:
+    that:
+      - grub_linux_generator.stat.exists
+      - grub_linux_generator.stat.isreg
+    fail_msg: "/etc/grub.d/10_linux is missing."
+
+- name: "17 | Backup GRUB Linux generator"
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/tasks/backup_file.yml"
+  vars:
+    backup_source: /etc/grub.d/10_linux
+
+- name: "17 | Allow normal Ubuntu boot without GRUB authentication"
+  ansible.builtin.replace:
+    path: /etc/grub.d/10_linux
+    regexp: "(\\$\\{CLASS\\})(?!\\s+--unrestricted)(\\s+)((?:\\\\)?\\$menuentry_id_option\\s+['\"]gnulinux-simple-)"
+    replace: '\1 --unrestricted\2\3'
+  register: grub_unrestricted_result
+  notify: Update GRUB
+   
+- name: "17 | Verify unrestricted normal boot generator"
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Pq
+      - --
+      - '\$\{CLASS\}\s+--unrestricted\s+\\?\$menuentry_id_option'
+      - /etc/grub.d/10_linux
+  changed_when: false
+ 
 - name: "17 | Configure GRUB password protection"
   when: grub_password_enabled | bool
   block:
-
     - name: "17 | Verify GRUB password hash is provided"
       ansible.builtin.assert:
         that:
-          - grub_password_hash | length > 50
-          - grub_password_hash.startswith('grub.pbkdf2.sha512.')
-        fail_msg: "A valid GRUB password hash must be provided through GRUB_PASSWORD_HASH."
+          - grub_password_hash is defined
+          - grub_password_hash | length > 100
+          - >-
+            grub_password_hash is match(
+              '^grub\.pbkdf2\.sha512\.[0-9]+\.[A-Fa-f0-9]+\.[A-Fa-f0-9]+$'
+            )
+        fail_msg: >-
+          A valid GRUB PBKDF2 hash must be provided through
+          GRUB_PASSWORD_HASH.
       no_log: true
 
     - name: "17 | Check whether GRUB configuration exists"

@@ -27,6 +27,7 @@
   ansible.builtin.apt:
     upgrade: dist
     autoremove: true
+  when: packages_full_upgrade_enabled | bool
 
 - name: "00 | Install required hardening packages"
   ansible.builtin.apt:
