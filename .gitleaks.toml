@@ -1,0 +1,10 @@
+title = "Golden Image Factory Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore trusted OpenSCAP security guide datastream"
+paths = [
+  '''^compliance/openscap/ssg-ubuntu2404-ds\.xml$'''
+]
