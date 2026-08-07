@@ -35,7 +35,7 @@
     replace: '\1 --unrestricted\2\3'
   register: grub_unrestricted_result
   notify: Update GRUB
-   
+
 - name: "17 | Verify unrestricted normal boot generator"
   ansible.builtin.command:
     argv:
@@ -45,7 +45,7 @@
       - '\$\{CLASS\}\s+--unrestricted\s+\\?\$menuentry_id_option'
       - /etc/grub.d/10_linux
   changed_when: false
- 
+
 - name: "17 | Configure GRUB password protection"
   when: grub_password_enabled | bool
   block:
