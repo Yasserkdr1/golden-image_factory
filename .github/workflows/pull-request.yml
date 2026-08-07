@@ -73,8 +73,13 @@ jobs:
 
       - name: Validate Packer configuration
         working-directory: packer/virtualbox
+        env:
+          PKR_VAR_iso_url: "https://example.invalid/ubuntu.iso"
+          PKR_VAR_ssh_password: "ci-password"
+          PKR_VAR_ssh_private_key_file: "/tmp/ci-key"
         run: |
-          packer validate .
+          touch /tmp/ci-key
+          packer validate
 
       - name: Check shell scripts
         run: |
