@@ -1,0 +1,18 @@
+---
+extends: default
+
+rules:
+  document-start: disable
+  line-length: disable
+  new-line-at-end-of-file: disable
+  comments: disable
+  comments-indentation: disable
+  empty-lines: disable
+  braces: disable
+
+  truthy:
+    allowed-values:
+      - "true"
+      - "false"
+      - "on"
+    check-keys: false 

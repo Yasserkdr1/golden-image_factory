@@ -1,4 +1,6 @@
 ---
+mount_hardening_separate_filesystems_enabled: true
+
 mount_hardening_entries:
   - path: /tmp
     required_opts:
@@ -28,4 +30,3 @@ proc_opts:
   - nosuid
   - noexec
   - hidepid=2
-

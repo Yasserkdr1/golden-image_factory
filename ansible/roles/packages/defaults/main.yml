@@ -5,7 +5,7 @@ hardening_packages:
   - libpam-tmpdir
   - auditd
   - nftables
-  - aide  
+  - aide
   - aide-common
   - apparmor
   - apparmor-utils
@@ -21,3 +21,4 @@ hardening_packages:
   - debsums
   - apt-listchanges
   - apt-show-versions
+  - lynis

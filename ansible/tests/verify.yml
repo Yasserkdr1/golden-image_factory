@@ -1,0 +1,6 @@
+---
+- name: "Run functional smoke tests"
+  ansible.builtin.import_playbook: smoke.yml
+
+- name: "Run security validation tests"
+  ansible.builtin.import_playbook: security.yml

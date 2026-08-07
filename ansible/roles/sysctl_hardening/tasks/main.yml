@@ -24,7 +24,13 @@
     mode: "0644"
   notify: Apply sysctl configuration
 
-- name: "09 | Verify sysctl configuration syntax"
+- name: "09 | Remove old sysctl hardening file"
+  ansible.builtin.file:
+    path: /etc/sysctl.d/99-hardening.conf
+    state: absent
+  notify: Apply sysctl configuration
+
+- name: "09 | Apply and verify sysctl configuration"
   ansible.builtin.command:
     cmd: "sysctl -p {{ sysctl_hardening_file }}"
   register: sysctl_validation

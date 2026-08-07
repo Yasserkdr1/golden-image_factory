@@ -1,5 +1,5 @@
 ---
-sysctl_hardening_file: "/etc/sysctl.d/99-hardening.conf"
+sysctl_hardening_file: "/etc/sysctl.d/zz-hardening.conf"
 
 sysctl_hardening_ipv4:
   net.ipv4.ip_forward: 0
@@ -39,7 +39,6 @@ sysctl_hardening_kernel:
   kernel.core_uses_pid: 1
   kernel.sysrq: 0
   kernel.unprivileged_bpf_disabled: 1
-  kernel.perf_event_paranoid: 2
+  kernel.perf_event_paranoid: 3
   dev.tty.ldisc_autoload: 0
   net.core.bpf_jit_harden: 2
-  kernel.perf_event_paranoid: 3kernel.perf_event_paranoid: 3

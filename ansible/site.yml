@@ -12,6 +12,7 @@
         mode: "0700"
   roles:
     - packages
+    - grub_hardening
     - pam_password_policy
     - mount_hardening
     - ssh_hardening
@@ -26,7 +27,6 @@
     - intrusion_detection_hardening
     - time_sync_hardening
     - crash_reporting_hardening
-    - grub_hardening
     - process_accounting_hardening
     - sudo_hardening
     - additional_fixes

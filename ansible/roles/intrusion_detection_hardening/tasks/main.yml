@@ -9,6 +9,10 @@
     state: present
     update_cache: false
 
+# -----------------------------------------------------------------------------
+# Fail2ban
+# -----------------------------------------------------------------------------
+
 - name: "14 | Create fail2ban configuration directory"
   ansible.builtin.file:
     path: "{{ fail2ban_config_directory }}/jail.d"
@@ -50,6 +54,35 @@
     enabled: true
     state: started
 
+- name: "14 | Flush fail2ban handler"
+  ansible.builtin.meta: flush_handlers
+
+- name: "14 | Wait for fail2ban socket"
+  ansible.builtin.wait_for:
+    path: /run/fail2ban/fail2ban.sock
+    state: present
+    timeout: 30
+
+- name: "14 | Verify fail2ban service is active"
+  ansible.builtin.command:
+    cmd: systemctl is-active fail2ban
+  register: fail2ban_service_status
+  changed_when: false
+  failed_when: fail2ban_service_status.stdout != "active"
+
+- name: "14 | Verify SSH jail is active"
+  ansible.builtin.command:
+    cmd: fail2ban-client status sshd
+  register: fail2ban_sshd_status
+  changed_when: false
+  retries: 5
+  delay: 3
+  until: fail2ban_sshd_status.rc == 0
+
+# -----------------------------------------------------------------------------
+# Rkhunter
+# -----------------------------------------------------------------------------
+
 - name: "14 | Configure daily rkhunter execution"
   ansible.builtin.lineinfile:
     path: "{{ rkhunter_default_file }}"
@@ -73,21 +106,9 @@
     - rkhunter_update_properties | bool
     - not rkhunter_properties_database.stat.exists
 
-- name: "14 | Flush fail2ban handler"
-  ansible.builtin.meta: flush_handlers
-
-- name: "14 | Verify fail2ban service is active"
-  ansible.builtin.command:
-    cmd: systemctl is-active fail2ban
-  register: fail2ban_service_status
-  changed_when: false
-  failed_when: fail2ban_service_status.stdout != "active"
-
-- name: "14 | Verify SSH jail is active"
-  ansible.builtin.command:
-    cmd: fail2ban-client status sshd
-  register: fail2ban_sshd_status
-  changed_when: false
+# -----------------------------------------------------------------------------
+# Optional Postfix removal
+# -----------------------------------------------------------------------------
 
 - name: "14 | Check whether Postfix is installed"
   ansible.builtin.command:

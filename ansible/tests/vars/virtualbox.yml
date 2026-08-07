@@ -1,0 +1,31 @@
+---
+platform_name: "virtualbox"
+
+required_separate_mounts:
+  - /tmp
+  - /var
+  - /home
+
+required_mount_options:
+  /tmp:
+    - nodev
+    - nosuid
+    - noexec
+
+  /var:
+    - nodev
+    - nosuid
+
+  /home:
+    - nodev
+    - nosuid
+
+  /dev/shm:
+    - nodev
+    - nosuid
+    - noexec
+
+  /proc:
+    - nodev
+    - nosuid
+    - noexec

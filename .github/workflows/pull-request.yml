@@ -1,0 +1,87 @@
+---
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate-code:
+    name: Validate code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ansible \
+            yamllint \
+            shellcheck
+
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install \
+            -r ansible/requirements.yml
+
+      - name: Install Packer
+        uses: hashicorp/setup-packer@v3
+        with:
+          version: "1.16.0"
+
+      - name: Check YAML files
+        run: |
+          yamllint -c .yamllint.yml \
+            ansible \
+            .github/workflows
+
+      - name: Check Ansible syntax
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventory/hosts.ini.example \
+            site.yml \
+            --syntax-check
+
+          ansible-playbook \
+            -i inventory/hosts.ini.example \
+            tests/verify.yml \
+            --syntax-check
+
+      - name: Check Packer formatting
+        working-directory: packer/virtualbox
+        run: |
+          packer fmt -check -recursive .
+
+      - name: Initialize Packer plugins
+        working-directory: packer/virtualbox
+        run: |
+          packer init .
+
+      - name: Validate Packer configuration
+        working-directory: packer/virtualbox
+        run: |
+          packer validate .
+
+      - name: Check shell scripts
+        run: |
+          find . \
+            -type f \
+            -name "*.sh" \
+            -not -path "./.git/*" \
+            -print0 |
+          xargs -0 -r shellcheck
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

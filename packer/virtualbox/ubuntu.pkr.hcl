@@ -1,0 +1,104 @@
+packer {
+  required_plugins {
+    virtualbox = {
+      version = ">= 1.0.0"
+      source  = "github.com/hashicorp/virtualbox"
+    }
+
+    ansible = {
+      version = "~> 1"
+      source  = "github.com/hashicorp/ansible"
+    }
+  }
+}
+
+source "virtualbox-iso" "ubuntu" {
+  vm_name       = var.vm_name
+  guest_os_type = "Ubuntu_64"
+
+  cpus      = 2
+  memory    = 2048
+  disk_size = 20000
+
+  headless = var.headless
+
+  iso_url      = var.iso_url
+  iso_checksum = var.iso_checksum
+
+  http_directory = "${path.root}/../common/http"
+  boot_wait      = "5s"
+
+  boot_command = [
+    "e<wait><down><down><down><end> autoinstall 'ds=nocloud;s=http://{{ .HTTPIP }}:{{ .HTTPPort }}/'<F10>"
+  ]
+
+  ssh_username         = var.ssh_username
+  ssh_private_key_file = var.ssh_private_key_file
+  ssh_timeout          = "30m"
+
+  shutdown_command = "echo '${var.ssh_password}' | sudo -S shutdown -P now"
+}
+build {
+  name = "ubuntu-golden-image"
+
+  sources = [
+    "source.virtualbox-iso.ubuntu"
+  ]
+
+  provisioner "ansible" {
+    playbook_file = "${path.root}/../../ansible/site.yml"
+    groups        = ["servers"]
+
+    ansible_env_vars = [
+      "ANSIBLE_HOST_KEY_CHECKING=False",
+      "ANSIBLE_ROLES_PATH=${path.root}/../../ansible/roles",
+      "GRUB_PASSWORD_HASH=${var.grub_password_hash}"
+    ]
+
+    extra_arguments = [
+      "--extra-vars",
+      "ansible_become_password=${var.ssh_password} packages_full_upgrade_enabled=true grub_password_enabled=true"
+    ]
+  }
+
+  provisioner "shell" {
+    inline = [
+      "echo '${var.ssh_password}' | sudo -S /usr/sbin/reboot"
+    ]
+
+    execute_command   = "{{ .Vars }} bash '{{ .Path }}'"
+    expect_disconnect = true
+  }
+
+  provisioner "shell" {
+    pause_before = "20s"
+
+    inline = [
+      "echo 'VM available after reboot'"
+    ]
+
+    execute_command = "{{ .Vars }} bash '{{ .Path }}'"
+  }
+
+  provisioner "ansible" {
+    playbook_file = "${path.root}/../../ansible/tests/verify.yml"
+    groups        = ["servers"]
+
+    ansible_env_vars = [
+      "ANSIBLE_HOST_KEY_CHECKING=False"
+    ]
+
+    extra_arguments = [
+      "--extra-vars",
+      "@${path.root}/../../ansible/tests/vars/virtualbox.yml",
+      "--extra-vars",
+      "ansible_become_password=${var.ssh_password}"
+    ]
+  }
+
+  provisioner "shell" {
+    script = "${path.root}/../../compliance/lynis/check-score.sh"
+
+    execute_command = "echo '${var.ssh_password}' | sudo -S env MINIMUM_SCORE=88 bash '{{ .Path }}'"
+  }
+}

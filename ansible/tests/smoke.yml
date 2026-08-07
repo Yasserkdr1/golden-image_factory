@@ -1,0 +1,377 @@
+---
+# =============================================================================
+# Golden Image — Functional Smoke Tests
+# =============================================================================
+
+- name: "Validate Golden Image functionality"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    image_platform: "virtualbox"
+    expected_admin_user: "admin"
+    minimum_free_space_mb: 500
+
+    essential_services:
+      - nftables
+      - fail2ban
+      - auditd
+      - apparmor
+
+  pre_tasks:
+    - name: "00 | Load platform variables"
+      ansible.builtin.include_vars:
+        file: "vars/{{ image_platform }}.yml"
+      tags:
+        - always
+
+  tasks:
+    # =========================================================================
+    # 01 — Operating system
+    # =========================================================================
+
+    - name: "01 | Verify Ubuntu operating system"
+      ansible.builtin.assert:
+        that:
+          - ansible_facts["distribution"] == "Ubuntu"
+          - ansible_facts["distribution_major_version"] == "24"
+        fail_msg: >-
+          Unexpected operating system:
+          {{ ansible_facts["distribution"] }}
+          {{ ansible_facts["distribution_version"] }}
+        success_msg: >-
+          Ubuntu {{ ansible_facts["distribution_version"] }} validated
+
+    - name: "01 | Verify system completed boot"
+      ansible.builtin.command:
+        cmd: systemctl is-system-running
+      register: system_running
+      changed_when: false
+      failed_when:
+        - system_running.stdout not in ["running", "degraded"]
+
+    - name: "01 | Read current boot identifier"
+      ansible.builtin.command:
+        cmd: cat /proc/sys/kernel/random/boot_id
+      register: boot_identifier
+      changed_when: false
+      failed_when: boot_identifier.stdout | trim | length == 0
+
+    - name: "01 | Read boot time"
+      ansible.builtin.command:
+        cmd: uptime -s
+      register: boot_time
+      changed_when: false
+
+    # =========================================================================
+    # 02 — SSH
+    # =========================================================================
+
+    - name: "02 | Confirm SSH connection"
+      ansible.builtin.ping:
+      become: false
+
+    - name: "02 | Validate SSH configuration"
+      ansible.builtin.command:
+        cmd: sshd -t
+      changed_when: false
+
+    - name: "02 | Verify SSH service is active"
+      ansible.builtin.command:
+        cmd: systemctl is-active ssh.service
+      register: ssh_active
+      changed_when: false
+      failed_when: ssh_active.stdout != "active"
+
+    - name: "02 | Read SSH service enablement"
+      ansible.builtin.command:
+        cmd: systemctl is-enabled ssh.service
+      register: ssh_service_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: "02 | Read SSH socket enablement"
+      ansible.builtin.command:
+        cmd: systemctl is-enabled ssh.socket
+      register: ssh_socket_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: "02 | Verify SSH starts automatically"
+      ansible.builtin.assert:
+        that:
+          - >-
+            ssh_service_enabled.stdout in ["enabled", "static"]
+            or ssh_socket_enabled.stdout in ["enabled", "static"]
+        fail_msg: >-
+          Neither ssh.service nor ssh.socket is enabled.
+
+    - name: "02 | Verify SSH port 22 is listening"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ss -lntH |
+          awk '{print $4}' |
+          grep -Eq '(:|\])22$'
+        executable: /bin/bash
+      changed_when: false
+
+    # =========================================================================
+    # 03 — Administrator and sudo
+    # =========================================================================
+
+    - name: "03 | Read administrator account"
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ expected_admin_user }}"
+
+    - name: "03 | Verify administrator account"
+      ansible.builtin.assert:
+        that:
+          - expected_admin_user in ansible_facts.getent_passwd
+          - ansible_facts.getent_passwd[expected_admin_user][1] | int >= 1000
+          - ansible_facts.getent_passwd[expected_admin_user][5] == "/bin/bash"
+        fail_msg: "Administrator account is incorrectly configured."
+
+    - name: "03 | Read administrator groups"
+      ansible.builtin.command:
+        cmd: "id -nG {{ expected_admin_user }}"
+      register: administrator_groups
+      changed_when: false
+
+    - name: "03 | Verify administrator belongs to sudo"
+      ansible.builtin.assert:
+        that:
+          - "'sudo' in administrator_groups.stdout.split()"
+        fail_msg: "{{ expected_admin_user }} is not in the sudo group."
+
+    - name: "03 | Verify privilege escalation"
+      ansible.builtin.command:
+        cmd: id -u
+      register: sudo_test
+      changed_when: false
+      failed_when: sudo_test.stdout != "0"
+
+    - name: "03 | Validate sudoers syntax"
+      ansible.builtin.command:
+        cmd: visudo -cf /etc/sudoers
+      changed_when: false
+
+    # =========================================================================
+    # 04 — Services
+    # =========================================================================
+
+    - name: "04 | Verify essential services are active"
+      ansible.builtin.command:
+        cmd: "systemctl is-active {{ item }}"
+      loop: "{{ essential_services }}"
+      register: active_services
+      changed_when: false
+      failed_when: active_services.stdout != "active"
+
+    - name: "04 | Verify essential services are enabled"
+      ansible.builtin.command:
+        cmd: "systemctl is-enabled {{ item }}"
+      loop: "{{ essential_services }}"
+      register: enabled_services
+      changed_when: false
+      failed_when:
+        - enabled_services.rc != 0
+        - enabled_services.stdout not in ["enabled", "static"]
+
+    - name: "04 | List failed systemd units"
+      ansible.builtin.command:
+        cmd: systemctl --failed --no-legend --plain
+      register: failed_units
+      changed_when: false
+
+    - name: "04 | Verify no systemd unit failed"
+      ansible.builtin.assert:
+        that:
+          - failed_units.stdout | trim | length == 0
+        fail_msg: |
+          Failed systemd units:
+          {{ failed_units.stdout }}
+
+    # =========================================================================
+    # 05 — Network
+    # =========================================================================
+
+    - name: "05 | Verify default route"
+      ansible.builtin.command:
+        cmd: ip route show default
+      register: default_route
+      changed_when: false
+      failed_when: default_route.stdout | trim | length == 0
+
+    - name: "05 | Verify DNS resolution"
+      ansible.builtin.command:
+        cmd: getent ahostsv4 archive.ubuntu.com
+      register: dns_resolution
+      changed_when: false
+      failed_when: dns_resolution.stdout | trim | length == 0
+
+    - name: "05 | Verify outbound HTTPS"
+      ansible.builtin.uri:
+        url: https://archive.ubuntu.com
+        method: HEAD
+        validate_certs: true
+        return_content: false
+        status_code:
+          - 200
+          - 301
+          - 302
+          - 403
+      changed_when: false
+
+    # =========================================================================
+    # 06 — Storage and mounts
+    # =========================================================================
+
+    - name: "06 | Validate fstab"
+      ansible.builtin.command:
+        cmd: findmnt --verify
+      changed_when: false
+
+    - name: "06 | Verify root filesystem is mounted"
+      ansible.builtin.command:
+        cmd: findmnt -rn --target / -o TARGET
+      register: root_mount
+      changed_when: false
+      failed_when: root_mount.stdout | trim != "/"
+
+    - name: "06 | Verify required separate mounts"
+      ansible.builtin.command:
+        cmd: "findmnt -rn --target {{ item }} -o TARGET"
+      loop: "{{ required_separate_mounts }}"
+      register: separate_mount_results
+      changed_when: false
+
+    - name: "06 | Assert required separate mounts"
+      ansible.builtin.assert:
+        that:
+          - item.stdout | trim == item.item
+        fail_msg: "{{ item.item }} is not mounted separately."
+        quiet: true
+      loop: "{{ separate_mount_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: "06 | Check root free space"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          df --output=avail -BM / |
+          tail -n 1 |
+          tr -dc '0-9'
+        executable: /bin/bash
+      register: root_free_space
+      changed_when: false
+
+    - name: "06 | Verify root free space"
+      ansible.builtin.assert:
+        that:
+          - root_free_space.stdout | int >= minimum_free_space_mb
+        fail_msg: >-
+          Root filesystem has only {{ root_free_space.stdout }} MB free.
+
+    - name: "06 | Verify no filesystem is at 90 percent"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          df -P -x tmpfs -x devtmpfs |
+          awk 'NR > 1 && $5+0 >= 90 {print $6 " " $5}'
+        executable: /bin/bash
+      register: full_filesystems
+      changed_when: false
+      failed_when: full_filesystems.stdout | trim | length > 0
+
+    - name: "06 | Verify temporary directory is writable"
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          test_file="$(mktemp /tmp/golden-image-smoke.XXXXXX)"
+          echo test > "$test_file"
+          rm -f "$test_file"
+        executable: /bin/bash
+      changed_when: false
+
+    # =========================================================================
+    # 07 — Package manager
+    # =========================================================================
+
+    - name: "07 | Check dpkg state"
+      ansible.builtin.command:
+        cmd: dpkg --audit
+      register: dpkg_audit
+      changed_when: false
+      failed_when: dpkg_audit.stdout | trim | length > 0
+
+    - name: "07 | Check package dependencies"
+      ansible.builtin.command:
+        cmd: apt-get check
+      changed_when: false
+
+    # =========================================================================
+    # 08 — Time
+    # =========================================================================
+
+    - name: "08 | Read time synchronization"
+      ansible.builtin.command:
+        cmd: timedatectl show
+      register: time_status
+      changed_when: false
+
+    - name: "08 | Verify NTP is enabled"
+      ansible.builtin.assert:
+        that:
+          - time_status.stdout is search('NTP=yes')
+        fail_msg: "NTP is not enabled."
+
+    # =========================================================================
+    # 09 — GRUB
+    # =========================================================================
+
+    - name: "09 | Validate GRUB configuration"
+      ansible.builtin.command:
+        cmd: grub-script-check /boot/grub/grub.cfg
+      changed_when: false
+
+    - name: "09 | Verify autoinstall parameters are absent"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -Eq
+          - "autoinstall|ds=nocloud"
+          - /boot/grub/grub.cfg
+      register: autoinstall_parameters
+      changed_when: false
+      failed_when: autoinstall_parameters.rc == 0
+
+    - name: "09 | Verify GRUB password exists"
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -Eq
+          - "^password_pbkdf2[[:space:]]+{{ expected_admin_user }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
+          - /boot/grub/grub.cfg
+      changed_when: false
+
+    # =========================================================================
+    # 10 — Summary
+    # =========================================================================
+
+    - name: "10 | Functional test summary"
+      ansible.builtin.debug:
+        msg:
+          - "Functional tests passed."
+          - "Platform: {{ platform_name }}"
+          - "Host: {{ inventory_hostname }}"
+          - >-
+            OS: {{ ansible_facts["distribution"] }}
+            {{ ansible_facts["distribution_version"] }}
+          - "Kernel: {{ ansible_facts['kernel'] }}"
+          - "Boot ID: {{ boot_identifier.stdout }}"
+          - "Boot time: {{ boot_time.stdout }}"
+          - "Root free space: {{ root_free_space.stdout }} MB"

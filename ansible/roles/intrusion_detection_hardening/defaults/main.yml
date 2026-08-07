@@ -17,4 +17,4 @@ rkhunter_default_file: "/etc/default/rkhunter"
 rkhunter_enable_daily_run: true
 rkhunter_update_properties: true
 
-remove_postfix: false
+remove_postfix: true

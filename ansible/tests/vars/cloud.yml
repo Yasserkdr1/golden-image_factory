@@ -1,0 +1,17 @@
+---
+platform_name: "cloud"
+
+# Une image cloud générique ne garantit pas que /tmp, /var et /home
+# sont déjà placés sur des partitions séparées.
+required_separate_mounts: []
+
+required_mount_options:
+  /dev/shm:
+    - nodev
+    - nosuid
+    - noexec
+
+  /proc:
+    - nodev
+    - nosuid
+    - noexec

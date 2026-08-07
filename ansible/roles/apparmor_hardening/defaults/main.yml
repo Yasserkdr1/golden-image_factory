@@ -14,4 +14,3 @@ apparmor_kernel_parameters:
 apparmor_enforce_profiles: true
 
 apparmor_profiles_to_enforce: []
-  
