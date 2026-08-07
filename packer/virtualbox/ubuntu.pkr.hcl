@@ -96,9 +96,40 @@ build {
     ]
   }
 
+  provisioner "file" {
+    source      = "${path.root}/../../compliance/openscap/ssg-ubuntu2404-ds.xml"
+    destination = "/tmp/ssg-ubuntu2404-ds.xml"
+  }
+
+  provisioner "shell" {
+    script = "${path.root}/../../compliance/openscap/check-compliance.sh"
+
+    execute_command = "echo '${var.ssh_password}' | sudo -S bash '{{ .Path }}'"
+  }
+
   provisioner "shell" {
     script = "${path.root}/../../compliance/lynis/check-score.sh"
 
     execute_command = "echo '${var.ssh_password}' | sudo -S env MINIMUM_SCORE=88 bash '{{ .Path }}'"
+  }
+
+  provisioner "shell" {
+    inline = [
+      "echo '${var.ssh_password}' | sudo -S chown -R ${var.ssh_username}:${var.ssh_username} /tmp/golden-image-validation"
+    ]
+
+    execute_command = "{{ .Vars }} bash '{{ .Path }}'"
+  }
+
+  provisioner "file" {
+    source      = "/tmp/golden-image-validation/"
+    destination = "${path.root}/reports/"
+    direction   = "download"
+  }
+
+  provisioner "shell" {
+    script = "${path.root}/../../scripts/cleanup-image.sh"
+
+    execute_command = "echo '${var.ssh_password}' | sudo -S bash '{{ .Path }}'"
   }
 }
