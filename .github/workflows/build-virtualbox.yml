@@ -1,0 +1,234 @@
+---
+name: Golden Image Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packer/virtualbox/**"
+      - "packer/common/**"
+      - "ansible/**"
+      - "compliance/**"
+      - "scripts/**"
+      - ".github/workflows/build-virtualbox.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: virtualbox-golden-image-build
+  cancel-in-progress: false
+
+jobs:
+  build-virtualbox:
+    name: Build VirtualBox Golden Image
+    runs-on: self-hosted
+
+    env:
+      PKR_VAR_ssh_password: ${{ secrets.PACKER_SSH_PASSWORD }}
+      PKR_VAR_grub_password_hash: ${{ secrets.GRUB_PASSWORD_HASH }}
+      PKR_VAR_iso_url: ${{ vars.UBUNTU_ISO_URL }}
+      PKR_VAR_iso_checksum: ${{ vars.UBUNTU_ISO_CHECKSUM }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Checkout
+      # -----------------------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Prepare SSH key
+      # -----------------------------------------------------------------------
+
+      - name: Create temporary SSH private key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PACKER_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          test -n "${SSH_PRIVATE_KEY}"
+
+          printf '%s\n' "${SSH_PRIVATE_KEY}" \
+            > "${RUNNER_TEMP}/golden_image_build"
+
+          chmod 600 "${RUNNER_TEMP}/golden_image_build"
+
+          echo "PKR_VAR_ssh_private_key_file=${RUNNER_TEMP}/golden_image_build" \
+            >> "${GITHUB_ENV}"
+
+      # -----------------------------------------------------------------------
+      # Check runner
+      # -----------------------------------------------------------------------
+
+      - name: Check required tools
+        run: |
+          set -euo pipefail
+
+          git --version
+          packer version
+          VBoxManage --version
+          ansible --version
+          ansible-playbook --version
+
+      - name: Check build variables
+        run: |
+          set -euo pipefail
+
+          test -n "${PKR_VAR_iso_url}"
+          test -n "${PKR_VAR_iso_checksum}"
+          test -n "${PKR_VAR_ssh_password}"
+          test -n "${PKR_VAR_grub_password_hash}"
+          test -n "${PKR_VAR_ssh_private_key_file}"
+
+          test -f "${PKR_VAR_ssh_private_key_file}"
+
+          echo "Build variables are available."
+
+      # -----------------------------------------------------------------------
+      # Ansible dependencies
+      # -----------------------------------------------------------------------
+
+      - name: Install Ansible collections
+        run: |
+          set -euo pipefail
+
+          ansible-galaxy collection install \
+            -r ansible/requirements.yml
+
+      # -----------------------------------------------------------------------
+      # Prepare workspace
+      # -----------------------------------------------------------------------
+
+      - name: Clean previous build outputs
+        run: |
+          set -euo pipefail
+
+          rm -rf packer/virtualbox/output-ubuntu
+          rm -rf packer/virtualbox/reports
+
+          mkdir -p packer/virtualbox/reports
+
+      # -----------------------------------------------------------------------
+      # Packer validation
+      # -----------------------------------------------------------------------
+
+      - name: Initialize Packer
+        working-directory: packer/virtualbox
+        run: |
+          set -euo pipefail
+          packer init .
+
+      - name: Check Packer formatting
+        working-directory: packer/virtualbox
+        run: |
+          set -euo pipefail
+          packer fmt -check -recursive .
+
+      - name: Validate Packer configuration
+        working-directory: packer/virtualbox
+        run: |
+          set -euo pipefail
+          packer validate .
+
+      # -----------------------------------------------------------------------
+      # Build
+      # -----------------------------------------------------------------------
+
+      - name: Build Golden Image
+        working-directory: packer/virtualbox
+        run: |
+          set -euo pipefail
+          packer build .
+
+      # -----------------------------------------------------------------------
+      # Artifact version
+      # -----------------------------------------------------------------------
+
+      - name: Generate artifact version
+        id: version
+        run: |
+          set -euo pipefail
+
+          SHORT_SHA="${GITHUB_SHA::7}"
+          VERSION="ubuntu-24.04-build-${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Artifact version: ${VERSION}"
+
+      # -----------------------------------------------------------------------
+      # Verify outputs
+      # -----------------------------------------------------------------------
+
+      - name: Verify Golden Image output
+        run: |
+          set -euo pipefail
+
+          test -d packer/virtualbox/output-ubuntu
+
+          find packer/virtualbox/output-ubuntu \
+            -maxdepth 1 \
+            -type f \
+            -print
+
+          find packer/virtualbox/output-ubuntu \
+            -maxdepth 1 \
+            -type f \
+            -name "*.ovf" \
+            | grep -q .
+
+          find packer/virtualbox/output-ubuntu \
+            -maxdepth 1 \
+            -type f \
+            -name "*.vmdk" \
+            | grep -q .
+
+      - name: Verify compliance reports
+        run: |
+          set -euo pipefail
+
+          test -d packer/virtualbox/reports/lynis
+          test -d packer/virtualbox/reports/openscap
+
+          test -s \
+            packer/virtualbox/reports/openscap/openscap-results.xml
+
+          test -s \
+            packer/virtualbox/reports/openscap/openscap-report.html
+
+          echo "Compliance reports:"
+          find packer/virtualbox/reports \
+            -type f \
+            -print
+
+      # -----------------------------------------------------------------------
+      # Upload artifacts
+      # -----------------------------------------------------------------------
+
+      - name: Upload Golden Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.version }}-virtualbox
+          path: packer/virtualbox/output-ubuntu/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Compliance Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.version }}-compliance-reports
+          path: packer/virtualbox/reports/
+          if-no-files-found: error
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Always remove temporary private key
+      # -----------------------------------------------------------------------
+
+      - name: Remove temporary SSH private key
+        if: always()
+        run: |
+          rm -f "${RUNNER_TEMP}/golden_image_build"
