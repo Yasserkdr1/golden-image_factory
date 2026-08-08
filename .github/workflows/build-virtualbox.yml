@@ -2,16 +2,6 @@
 name: Golden Image Build
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "packer/virtualbox/**"
-      - "packer/common/**"
-      - "ansible/**"
-      - "compliance/**"
-      - "scripts/**"
-      - ".github/workflows/build-virtualbox.yml"
   workflow_dispatch:
 
 permissions:
