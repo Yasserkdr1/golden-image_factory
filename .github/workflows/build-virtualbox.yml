@@ -3,6 +3,15 @@ name: Golden Image Build
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_image:
+        description: "Upload VirtualBox image artifact (OVF/VMDK)"
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
 
 permissions:
   contents: read
@@ -196,6 +205,7 @@ jobs:
       # -----------------------------------------------------------------------
 
       - name: Upload Golden Image
+        if: ${{ inputs.upload_image == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.version.outputs.version }}-virtualbox
