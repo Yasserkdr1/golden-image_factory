@@ -180,19 +180,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -d packer/virtualbox/reports/lynis
-          test -d packer/virtualbox/reports/openscap
+          REPORT_ROOT="packer/virtualbox/reports/golden-image-validation"
 
-          test -s \
-            packer/virtualbox/reports/openscap/openscap-results.xml
+          test -d "${REPORT_ROOT}/lynis"
+          test -d "${REPORT_ROOT}/openscap"
 
-          test -s \
-            packer/virtualbox/reports/openscap/openscap-report.html
+          test -s "${REPORT_ROOT}/openscap/openscap-results.xml"
+          test -s "${REPORT_ROOT}/openscap/openscap-report.html"
 
           echo "Compliance reports:"
-          find packer/virtualbox/reports \
-            -type f \
-            -print
+          find "${REPORT_ROOT}" -type f -print
 
       # -----------------------------------------------------------------------
       # Upload artifacts
