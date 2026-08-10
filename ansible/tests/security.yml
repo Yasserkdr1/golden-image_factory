@@ -10,7 +10,7 @@
 
   vars:
     image_platform: "virtualbox"
-    expected_admin_user: "admin"
+    expected_admin_user: "{{ platform_expected_admin_user | default('admin') }}"
 
     expected_sysctl:
       fs.protected_fifos: "2"
@@ -222,28 +222,32 @@
     # 08 — GRUB
     # =========================================================================
 
-    - name: "08 | Validate GRUB script"
-      ansible.builtin.command:
-        cmd: grub-script-check /boot/grub/grub.cfg
-      changed_when: false
+    - name: "08 | Validate GRUB hardening"
+      when: grub_hardening_expected | bool
+      block:
 
-    - name: "08 | Verify GRUB superuser"
-      ansible.builtin.command:
-        argv:
-          - grep
-          - -Eq
-          - "^set superusers=\"{{ expected_admin_user }}\"$"
-          - /boot/grub/grub.cfg
-      changed_when: false
+        - name: "08 | Validate GRUB script"
+          ansible.builtin.command:
+            cmd: grub-script-check /boot/grub/grub.cfg
+          changed_when: false
 
-    - name: "08 | Verify GRUB password"
-      ansible.builtin.command:
-        argv:
-          - grep
-          - -Eq
-          - "^password_pbkdf2[[:space:]]+{{ expected_admin_user }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
-          - /boot/grub/grub.cfg
-      changed_when: false
+        - name: "08 | Verify GRUB superuser"
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -Eq
+              - "^set superusers=\"{{ expected_admin_user }}\"$"
+              - /boot/grub/grub.cfg
+          changed_when: false
+
+        - name: "08 | Verify GRUB password"
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -Eq
+              - "^password_pbkdf2[[:space:]]+{{ expected_admin_user }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
+              - /boot/grub/grub.cfg
+          changed_when: false
 
     # =========================================================================
     # 09 — PAM and passwords

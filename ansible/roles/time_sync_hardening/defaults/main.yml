@@ -1,4 +1,6 @@
 ---
+time_sync_backend: "timesyncd"
+
 time_sync_service: "systemd-timesyncd"
 
 time_sync_dropin_directory: "/etc/systemd/timesyncd.conf.d"

@@ -2,6 +2,7 @@
 grub_password_enabled: false
 grub_superuser: "admin"
 grub_custom_file: "/etc/grub.d/40_custom_hardening"
+grub_hardening_enabled: true
 
 grub_password_hash: >-
   {{ lookup('ansible.builtin.env', 'GRUB_PASSWORD_HASH') }}
