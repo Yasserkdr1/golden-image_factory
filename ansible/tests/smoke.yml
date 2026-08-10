@@ -10,7 +10,7 @@
 
   vars:
     image_platform: "virtualbox"
-    expected_admin_user: "admin"
+    expected_admin_user: "{{ platform_expected_admin_user | default('admin') }}"
     minimum_free_space_mb: 500
 
     essential_services:
@@ -145,13 +145,17 @@
         that:
           - "'sudo' in administrator_groups.stdout.split()"
         fail_msg: "{{ expected_admin_user }} is not in the sudo group."
+      when: admin_sudo_group_required | default(true) | bool
 
-    - name: "03 | Verify privilege escalation"
+    - name: "03 | Verify administrator can escalate privileges"
       ansible.builtin.command:
-        cmd: id -u
+        cmd: sudo -n id -u
+      become: false
       register: sudo_test
       changed_when: false
-      failed_when: sudo_test.stdout != "0"
+      failed_when:
+        - sudo_test.rc != 0
+        - sudo_test.stdout | trim != "0"
 
     - name: "03 | Validate sudoers syntax"
       ansible.builtin.command:
@@ -314,49 +318,96 @@
       changed_when: false
 
     # =========================================================================
-    # 08 — Time
+    # 08 — Time synchronization
     # =========================================================================
 
-    - name: "08 | Read time synchronization"
-      ansible.builtin.command:
-        cmd: timedatectl show
-      register: time_status
-      changed_when: false
+    # -------------------------------------------------------------------------
+    # VirtualBox / systemd-timesyncd
+    # -------------------------------------------------------------------------
 
-    - name: "08 | Verify NTP is enabled"
-      ansible.builtin.assert:
-        that:
-          - time_status.stdout is search('NTP=yes')
-        fail_msg: "NTP is not enabled."
+    - name: "08 | Validate systemd-timesyncd"
+      when: time_sync_backend == "timesyncd"
+      block:
 
+        - name: "08 | Read time synchronization"
+          ansible.builtin.command:
+            cmd: timedatectl show
+          register: time_status
+          changed_when: false
+
+        - name: "08 | Verify NTP is enabled"
+          ansible.builtin.assert:
+            that:
+              - time_status.stdout is search('NTP=yes')
+            fail_msg: "NTP is not enabled."
+            success_msg: "NTP is enabled."
+
+
+    # -------------------------------------------------------------------------
+    # chrony
+    # -------------------------------------------------------------------------
+
+    - name: "08 | Validate chrony synchronization"
+      when: time_sync_backend == "chrony"
+      block:
+
+        - name: "08 | Check chrony service"
+          ansible.builtin.command:
+            cmd: systemctl is-active chrony
+          register: chrony_status
+          changed_when: false
+
+        - name: "08 | Verify chrony service is active"
+          ansible.builtin.assert:
+            that:
+              - chrony_status.stdout == "active"
+            fail_msg: "Chrony is not active."
+            success_msg: "Chrony is active."
+
+        - name: "08 | Read chrony tracking status"
+          ansible.builtin.command:
+            cmd: chronyc tracking
+          register: chrony_tracking
+          changed_when: false
+
+        - name: "08 | Verify chrony has a synchronization source"
+          ansible.builtin.assert:
+            that:
+              - chrony_tracking.stdout is search('Reference ID')
+            fail_msg: "Chrony does not report a synchronization source."
+            success_msg: "Chrony reports a synchronization source."
     # =========================================================================
     # 09 — GRUB
     # =========================================================================
 
-    - name: "09 | Validate GRUB configuration"
-      ansible.builtin.command:
-        cmd: grub-script-check /boot/grub/grub.cfg
-      changed_when: false
+    - name: "09 | Validate GRUB hardening"
+      when: grub_hardening_expected | bool
+      block:
 
-    - name: "09 | Verify autoinstall parameters are absent"
-      ansible.builtin.command:
-        argv:
-          - grep
-          - -Eq
-          - "autoinstall|ds=nocloud"
-          - /boot/grub/grub.cfg
-      register: autoinstall_parameters
-      changed_when: false
-      failed_when: autoinstall_parameters.rc == 0
+        - name: "09 | Validate GRUB configuration"
+          ansible.builtin.command:
+            cmd: grub-script-check /boot/grub/grub.cfg
+          changed_when: false
 
-    - name: "09 | Verify GRUB password exists"
-      ansible.builtin.command:
-        argv:
-          - grep
-          - -Eq
-          - "^password_pbkdf2[[:space:]]+{{ expected_admin_user }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
-          - /boot/grub/grub.cfg
-      changed_when: false
+        - name: "09 | Verify autoinstall parameters are absent"
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -Eq
+              - "autoinstall|ds=nocloud"
+              - /boot/grub/grub.cfg
+          register: autoinstall_parameters
+          changed_when: false
+          failed_when: autoinstall_parameters.rc == 0
+
+        - name: "09 | Verify GRUB password exists"
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -Eq
+              - "^password_pbkdf2[[:space:]]+{{ expected_admin_user }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
+              - /boot/grub/grub.cfg
+          changed_when: false
 
     # =========================================================================
     # 10 — Summary

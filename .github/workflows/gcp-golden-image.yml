@@ -1,0 +1,231 @@
+---
+name: GCP Golden Image Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gcp-golden-image-build
+  cancel-in-progress: false
+
+jobs:
+  build-gcp:
+    name: Build GCP Golden Image
+    runs-on: ubuntu-latest
+
+    env:
+      PKR_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      PKR_VAR_zone: ${{ vars.GCP_ZONE }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Checkout
+      # -----------------------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Authenticate to Google Cloud
+      # -----------------------------------------------------------------------
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PACKER_SERVICE_ACCOUNT }}
+
+      - name: Setup Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      # -----------------------------------------------------------------------
+      # Setup tools
+      # -----------------------------------------------------------------------
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: "1.16.0"
+
+      - name: Install Ansible
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      # -----------------------------------------------------------------------
+      # Check runner
+      # -----------------------------------------------------------------------
+
+      - name: Check required tools
+        run: |
+          set -euo pipefail
+
+          git --version
+          packer version
+          ansible --version
+          ansible-playbook --version
+          gcloud version
+
+      - name: Check GCP authentication
+        run: |
+          set -euo pipefail
+
+          gcloud auth list
+          gcloud config set project "${PKR_VAR_project_id}"
+
+          gcloud projects describe "${PKR_VAR_project_id}" \
+            --format="value(projectId)"
+
+      - name: Check build variables
+        run: |
+          set -euo pipefail
+
+          test -n "${PKR_VAR_project_id}"
+          test -n "${PKR_VAR_zone}"
+
+          echo "GCP build variables are available."
+
+      # -----------------------------------------------------------------------
+      # Ansible dependencies
+      # -----------------------------------------------------------------------
+
+      - name: Install Ansible collections
+        run: |
+          set -euo pipefail
+
+          ansible-galaxy collection install \
+            -r ansible/requirements.yml
+
+      # -----------------------------------------------------------------------
+      # Prepare workspace
+      # -----------------------------------------------------------------------
+
+      - name: Clean previous reports
+        run: |
+          set -euo pipefail
+
+          rm -rf packer/gcp/reports
+          mkdir -p packer/gcp/reports
+
+      # -----------------------------------------------------------------------
+      # Packer validation
+      # -----------------------------------------------------------------------
+
+      - name: Initialize Packer
+        working-directory: packer/gcp
+        run: |
+          set -euo pipefail
+          packer init .
+
+      - name: Check Packer formatting
+        working-directory: packer/gcp
+        run: |
+          set -euo pipefail
+          packer fmt -check -recursive .
+
+      - name: Validate Packer configuration
+        working-directory: packer/gcp
+        run: |
+          set -euo pipefail
+          packer validate .
+
+      # -----------------------------------------------------------------------
+      # Build
+      # -----------------------------------------------------------------------
+
+      - name: Build GCP Golden Image
+        working-directory: packer/gcp
+        run: |
+          set -euo pipefail
+
+          packer build .
+
+      # -----------------------------------------------------------------------
+      # Artifact version
+      # -----------------------------------------------------------------------
+
+      - name: Generate artifact version
+        id: version
+        run: |
+          set -euo pipefail
+
+          SHORT_SHA="${GITHUB_SHA::7}"
+          VERSION="ubuntu-24.04-gcp-build-${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Artifact version: ${VERSION}"
+
+      # -----------------------------------------------------------------------
+      # Verify reports
+      # -----------------------------------------------------------------------
+
+      - name: Verify compliance reports
+        run: |
+          set -euo pipefail
+
+          REPORT_ROOT="packer/gcp/reports/golden-image-validation"
+
+          test -d "${REPORT_ROOT}/lynis"
+          test -d "${REPORT_ROOT}/openscap"
+
+          test -s "${REPORT_ROOT}/openscap/openscap-results.xml"
+          test -s "${REPORT_ROOT}/openscap/openscap-report.html"
+
+          echo "Compliance reports:"
+          find "${REPORT_ROOT}" -type f -print
+
+      # -----------------------------------------------------------------------
+      # Verify GCP image
+      # -----------------------------------------------------------------------
+
+      - name: Verify GCP Golden Image exists
+        run: |
+          set -euo pipefail
+
+          IMAGE_NAME="$(
+            gcloud compute images list \
+              --project="${PKR_VAR_project_id}" \
+              --filter="name~'^ubuntu-2404-golden-'" \
+              --sort-by=~creationTimestamp \
+              --limit=1 \
+              --format='value(name)'
+          )"
+
+          test -n "${IMAGE_NAME}"
+
+          echo "Golden Image created: ${IMAGE_NAME}"
+          echo "image_name=${IMAGE_NAME}" >> "${GITHUB_ENV}"
+
+      # -----------------------------------------------------------------------
+      # Upload compliance reports
+      # -----------------------------------------------------------------------
+
+      - name: Upload Compliance Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.version }}-compliance-reports
+          path: packer/gcp/reports/
+          if-no-files-found: error
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Summary
+      # -----------------------------------------------------------------------
+
+      - name: Build summary
+        run: |
+          {
+            echo "## GCP Golden Image Build"
+            echo
+            echo "- Project: \`${PKR_VAR_project_id}\`"
+            echo "- Zone: \`${PKR_VAR_zone}\`"
+            echo "- Image: \`${image_name}\`"
+            echo "- Version: \`${{ steps.version.outputs.version }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

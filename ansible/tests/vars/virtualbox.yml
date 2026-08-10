@@ -1,6 +1,8 @@
 ---
 platform_name: "virtualbox"
-
+grub_hardening_expected: true
+time_sync_backend: "timesyncd"
+admin_sudo_group_required: true
 required_separate_mounts:
   - /tmp
   - /var

@@ -1,8 +1,11 @@
 ---
 platform_name: "cloud"
+grub_hardening_expected: false
+time_sync_backend: "chrony"
+platform_expected_admin_user: "packer"
+admin_sudo_group_required: false
 
-# Une image cloud générique ne garantit pas que /tmp, /var et /home
-# sont déjà placés sur des partitions séparées.
+
 required_separate_mounts: []
 
 required_mount_options:
