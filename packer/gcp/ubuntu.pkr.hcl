@@ -75,11 +75,11 @@ build {
   }
 
   provisioner "shell" {
-    pause_before = "60s"         
+    pause_before = "60s"
 
     inline = [
       "echo 'GCP VM available after reboot'",
-      "uptime -s"                  
+      "uptime -s"
     ]
   }
 
