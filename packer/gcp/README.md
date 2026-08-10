@@ -190,7 +190,7 @@ gcloud projects get-iam-policy "$PROJECT_ID" \
 
 ---
 
-# 🔗 Workload Identity Federation
+#  Workload Identity Federation
 
 GitHub Actions authenticates to Google Cloud using GitHub's OIDC identity.
 
@@ -282,7 +282,7 @@ packer-github Service Account
 
 ---
 
-# 🔎 Get the Provider Identifier
+#  Get the Provider Identifier
 
 Run:
 
@@ -308,7 +308,7 @@ GCP_WORKLOAD_IDENTITY_PROVIDER
 
 ---
 
-# 🐙 GitHub Repository Variables
+#  GitHub Repository Variables
 
 Go to:
 
@@ -376,7 +376,7 @@ Then:
 
 ---
 
-# ⚙️ Packer Environment Variables
+#  Packer Environment Variables
 
 The workflow maps GitHub configuration to Packer:
 
@@ -406,7 +406,7 @@ var.zone
 
 ---
 
-# 🧱 Packer Build Configuration
+#  Packer Build Configuration
 
 The GCP builder uses the official Ubuntu image family:
 
@@ -432,21 +432,16 @@ ubuntu-2404-golden-YYYYMMDD-HHMMSS
 
 ---
 
-# 🌐 SSH Connectivity
+#  SSH Connectivity
 
 The current build can use a temporary external IP:
 
 ```hcl
 use_iap          = true
 ```
-
-This allows a GitHub-hosted runner to connect directly to the temporary Compute Engine VM.
-
-IAP is enabled later for a build architecture without a public VM address is required.
-
 ---
 
-# 🤖 Ansible Hardening
+#  Ansible Hardening
 
 Packer executes the common hardening playbook:
 
@@ -596,7 +591,7 @@ This prepares the VM for use as a reusable Golden Image.
 
 ---
 
-# 🖥️ Local GCP Build
+#  Local GCP Build
 
 GCP images can also be tested locally when the Google Cloud CLI is authenticated.
 
@@ -742,7 +737,7 @@ gcloud compute images list \
 
 ---
 
-# 🧯 Troubleshooting
+#  Troubleshooting
 
 ## Cloud Resource Manager API Disabled
 
