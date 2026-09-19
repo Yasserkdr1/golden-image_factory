@@ -10,7 +10,13 @@
 
   vars:
     image_platform: "virtualbox"
-    expected_admin_user: "{{ platform_expected_admin_user | default('admin') }}"
+
+    # Linux build account
+    expected_admin_user: "{{ platform_expected_admin_user | default('packer') }}"
+
+    # GRUB authentication account
+    expected_grub_superuser: "{{ platform_expected_grub_superuser | default('admin') }}"
+
     minimum_free_space_mb: 500
 
     essential_services:
@@ -149,13 +155,16 @@
 
     - name: "03 | Verify administrator can escalate privileges"
       ansible.builtin.command:
-        cmd: sudo -n id -u
-      become: false
+        cmd: id -u
+      become: true
       register: sudo_test
       changed_when: false
-      failed_when:
-        - sudo_test.rc != 0
-        - sudo_test.stdout | trim != "0"
+
+    - name: "03 | Verify privilege escalation reached root"
+      ansible.builtin.assert:
+        that:
+          - sudo_test.stdout | trim == "0"
+        fail_msg: "{{ expected_admin_user }} cannot escalate privileges."
 
     - name: "03 | Validate sudoers syntax"
       ansible.builtin.command:
@@ -405,7 +414,7 @@
             argv:
               - grep
               - -Eq
-              - "^password_pbkdf2[[:space:]]+{{ expected_admin_user }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
+              - "^password_pbkdf2[[:space:]]+{{ expected_grub_superuser }}[[:space:]]+grub\\.pbkdf2\\.sha512\\."
               - /boot/grub/grub.cfg
           changed_when: false
 

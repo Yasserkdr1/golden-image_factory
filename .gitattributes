@@ -1,0 +1,8 @@
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.hcl text eol=lf
+packer/common/http/user-data text eol=lf
+*.ps1 text eol=crlf
+*.hcl.example text eol=lf
+.gitattributes text eol=lf

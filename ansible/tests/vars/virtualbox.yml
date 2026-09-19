@@ -1,5 +1,11 @@
 ---
 platform_name: "virtualbox"
+# Temporary Linux account used during the Packer build
+platform_expected_admin_user: "packer"
+
+# GRUB authentication account baked into the Golden Image by default
+platform_expected_grub_superuser: "admin"
+
 grub_hardening_expected: true
 time_sync_backend: "timesyncd"
 admin_sudo_group_required: true

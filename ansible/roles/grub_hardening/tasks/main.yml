@@ -46,7 +46,7 @@
           - grep
           - -Pq
           - --
-          - '${CLASS}\s+--unrestricted\s+\?$menuentry_id_option'
+          - '\$\{CLASS\}\s+--unrestricted\s+\\?\$menuentry_id_option'
           - /etc/grub.d/10_linux
       changed_when: false
 
