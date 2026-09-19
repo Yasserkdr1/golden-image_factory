@@ -1,73 +1,83 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "ERROR: This script must be run as root."
-  exit 1
+    echo "[CLEANUP] ERROR: This script must be run as root."
+    exit 1
 fi
 
-echo "Starting golden image cleanup..."
+echo "[CLEANUP] Starting build cleanup..."
 
-# ---------------------------------------------------------------------------
-# Remove validation reports and temporary audit data
-# ---------------------------------------------------------------------------
+
+# ------------------------------------------------------------
+# 1. Remove validation reports and temporary audit data
+# ------------------------------------------------------------
+
+echo "[CLEANUP] Removing validation data..."
 
 rm -rf /tmp/golden-image-validation
 rm -f /tmp/ssg-ubuntu2404-ds.xml
 
-# ---------------------------------------------------------------------------
-# Remove audit-only tools
-# ---------------------------------------------------------------------------
+
+# ------------------------------------------------------------
+# 2. Remove audit-only tools
+# ------------------------------------------------------------
+
+echo "[CLEANUP] Removing audit-only packages..."
 
 if dpkg-query -W -f='${Status}' lynis 2>/dev/null \
-  | grep -q "install ok installed"; then
-  apt-get purge -y lynis
+    | grep -q "install ok installed"; then
+
+    apt-get purge -y lynis
 fi
+
 
 if dpkg-query -W -f='${Status}' openscap-scanner 2>/dev/null \
-  | grep -q "install ok installed"; then
-  apt-get purge -y openscap-scanner
+    | grep -q "install ok installed"; then
+
+    apt-get purge -y openscap-scanner
 fi
 
-apt-get autoremove -y --purge
-apt-get clean
 
-# ---------------------------------------------------------------------------
-# Clean package cache
-# ---------------------------------------------------------------------------
+# ------------------------------------------------------------
+# 3. Remove Ansible installed only for ansible-local
+# ------------------------------------------------------------
+
+echo "[CLEANUP] Removing build-only Ansible packages..."
+
+if dpkg-query -W -f='${Status}' ansible 2>/dev/null \
+    | grep -q "install ok installed"; then
+
+    apt-get purge -y ansible
+fi
+
+if dpkg-query -W -f='${Status}' ansible-core 2>/dev/null \
+    | grep -q "install ok installed"; then
+
+    apt-get purge -y ansible-core
+fi
+
+
+# ------------------------------------------------------------
+# 4. Remove unused dependencies
+# ------------------------------------------------------------
+
+echo "[CLEANUP] Removing unused packages..."
+
+DEBIAN_FRONTEND=noninteractive apt-get autoremove -y --purge
+
+
+# ------------------------------------------------------------
+# 5. Clean APT cache
+# ------------------------------------------------------------
+
+echo "[CLEANUP] Cleaning APT cache..."
+
+apt-get clean
 
 rm -rf /var/lib/apt/lists/*
 rm -rf /var/cache/apt/archives/*
 
-# ---------------------------------------------------------------------------
-# Clean temporary files
-# ---------------------------------------------------------------------------
 
-rm -rf /tmp/*
-rm -rf /var/tmp/*
-
-# ---------------------------------------------------------------------------
-# Clean shell history
-# ---------------------------------------------------------------------------
-
-rm -f /root/.bash_history
-rm -f /home/*/.bash_history
-
-
-
-# ---------------------------------------------------------------------------
-# Reset machine identity
-# ---------------------------------------------------------------------------
-
-truncate -s 0 /etc/machine-id
-
-rm -f /var/lib/dbus/machine-id
-ln -s /etc/machine-id /var/lib/dbus/machine-id
-
-# ---------------------------------------------------------------------------
-# Flush filesystem buffers
-# ---------------------------------------------------------------------------
-
-sync
-
-echo "Golden image cleanup completed."
+echo "[CLEANUP] Build cleanup completed successfully."
