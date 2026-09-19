@@ -31,6 +31,9 @@
 # ---------------------------
 # PACKER_SSH_PRIVATE_KEY
 #   Private key matching the public key embedded in packer/common/http/user-data.
+#   GitHub stores it as a repository Secret. During a run, only a temporary
+#   local copy is written under RUNNER_TEMP; that local copy is deleted by an
+#   always() cleanup step. The GitHub Secret itself remains stored in GitHub.
 #
 # PACKER_SSH_PASSWORD
 #   Temporary build user's sudo password. It must correspond to the password
@@ -144,9 +147,8 @@ jobs:
       PKR_VAR_ssh_username: "packer"
       PKR_VAR_ssh_password: ${{ secrets.PACKER_SSH_PASSWORD }}
 
-      # The private key is materialized later under RUNNER_TEMP.
-      PKR_VAR_ssh_private_key_file: ${{ runner.temp }}\golden-image-build-key
-
+      # The private-key path is initialized in a step after the runner starts.
+      # The runner context is not available in jobs.<job_id>.env.
       PKR_VAR_grub_password_hash: ${{ secrets.GRUB_PASSWORD_HASH }}
 
       # Unique name avoids collisions between retries/runs.
@@ -246,6 +248,34 @@ jobs:
 
           Write-Host "[OK] Required Windows host tools are available."
 
+      - name: Initialize temporary Packer SSH key path
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # RUNNER_TEMP is available as a normal environment variable once the
+          # self-hosted runner is executing this job.
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+              throw "RUNNER_TEMP is not available on this self-hosted runner."
+          }
+
+          $keyPath = Join-Path $env:RUNNER_TEMP "golden-image-build-key"
+
+          # Remove a stale key file if a previous runner process was interrupted.
+          if (Test-Path -LiteralPath $keyPath -PathType Leaf) {
+              Remove-Item -LiteralPath $keyPath -Force
+          }
+
+          # Persist the path for every following workflow step.
+          # This form is compatible with Windows PowerShell 5.1.
+          "PKR_VAR_ssh_private_key_file=$keyPath" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          Write-Host "[OK] Temporary Packer SSH key path initialized."
+          Write-Host "Path: $keyPath"
+
       - name: Validate required Packer variables and secrets
         run: |
           $ErrorActionPreference = "Stop"
@@ -338,7 +368,7 @@ jobs:
           Write-Host "[OK] No other VirtualBox VMs are running."
 
       # =======================================================================
-      # 04 - Materialize and validate the temporary Packer SSH key
+      # 04 - Materialize and validate the secret-backed Packer SSH key
       # =======================================================================
 
       - name: Create temporary build SSH private key
