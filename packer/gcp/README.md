@@ -13,92 +13,54 @@
 
 ---
 
-## 📖 Overview
+## Overview
 
-This directory contains the Packer configuration used to create the hardened Ubuntu 24.04 Golden Image on **Google Cloud Platform**.
+This directory contains the Packer configuration used to build the hardened Ubuntu 24.04 Golden Image on **Google Cloud Platform**. The authentication architecture does **not** require a long-lived Google service account JSON key.
 
-The cloud pipeline combines:
-
-```text
-GitHub Actions
-      │
-      ▼
-Workload Identity Federation
-      │
-      ▼
-GCP Service Account
-      │
-      ▼
-Packer
-      │
-      ▼
-Compute Engine
-      │
-      ▼
-Ansible Hardening
-      │
-      ▼
-Lynis + OpenSCAP
-      │
-      ▼
-GCP Golden Image
-```
-
-The authentication architecture does **not require a long-lived Google service account JSON key**.
-
----
-
-# Authentication Architecture
-
-```text
-GitHub Repository
-       │
-       ▼
-GitHub Actions
-       │
-       │ OIDC Token
-       ▼
-Google Workload Identity Pool
-       │
-       ▼
-GitHub OIDC Provider
-       │
-       ▼
-Packer Service Account
-       │
-       ▼
-Google Compute Engine
+```mermaid
+flowchart TD
+    GHA[GitHub Actions] --> WIF[Workload Identity Federation]
+    WIF --> SA[GCP Service Account]
+    SA --> PACKER[Packer]
+    PACKER --> GCE[Compute Engine]
+    GCE --> ANSIBLE[Ansible Hardening]
+    ANSIBLE --> CHECKS[Lynis + OpenSCAP]
+    CHECKS --> IMAGE[(GCP Golden Image)]
 ```
 
 ---
 
-# Prerequisites
+## Authentication Architecture
 
-Before running the GCP pipeline, the following components must exist:
+```mermaid
+flowchart TD
+    REPO[GitHub Repository] --> GHA[GitHub Actions]
+    GHA -->|OIDC token| POOL[Google Workload Identity Pool]
+    POOL --> PROVIDER[GitHub OIDC Provider]
+    PROVIDER --> SA[Packer Service Account]
+    SA --> GCE[Google Compute Engine]
+```
 
-- Google Cloud project
-- Compute Engine enabled
-- dedicated Packer service account
-- Workload Identity Pool
-- GitHub OIDC Provider
+---
+
+## Prerequisites
+
+Before running the GCP pipeline, the following must exist:
+
+- Google Cloud project with Compute Engine enabled
+- Dedicated Packer service account
+- Workload Identity Pool + GitHub OIDC Provider
 - GitHub → Service Account IAM binding
-- required GCP APIs
-- required IAM roles
+- Required GCP APIs and IAM roles
 - GitHub repository variables
 
 ---
 
-# Required Google APIs
-
-Set your project:
+## Required Google APIs
 
 ```bash
 PROJECT_ID="YOUR_GCP_PROJECT_ID"
-```
 
-Enable:
-
-```bash
 gcloud services enable \
   compute.googleapis.com \
   iamcredentials.googleapis.com \
@@ -116,41 +78,23 @@ gcloud services list \
   --format="table(config.name)"
 ```
 
-Expected APIs:
-
-```text
-cloudresourcemanager.googleapis.com
-compute.googleapis.com
-iamcredentials.googleapis.com
-```
+Expected: `cloudresourcemanager.googleapis.com`, `compute.googleapis.com`, `iamcredentials.googleapis.com`.
 
 ---
 
-# 👤 Packer Service Account
-
-Create a dedicated service account:
+## Packer Service Account
 
 ```bash
 gcloud iam service-accounts create packer-github \
   --project="$PROJECT_ID" \
   --display-name="GitHub Packer Service Account"
-```
 
-The account follows:
-
-```text
-packer-github@PROJECT_ID.iam.gserviceaccount.com
-```
-
-Set:
-
-```bash
 SA="packer-github@${PROJECT_ID}.iam.gserviceaccount.com"
 ```
 
 ---
 
-# 🔑 IAM Roles
+## IAM Roles
 
 The service account requires:
 
@@ -159,25 +103,17 @@ roles/compute.instanceAdmin.v1
 roles/iam.serviceAccountUser
 ```
 
-Assign:
-
 ```bash
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${SA}" \
   --role="roles/compute.instanceAdmin.v1"
-```
 
-```bash
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${SA}" \
   --role="roles/iam.serviceAccountUser"
 ```
 
-When IAP SSH tunneling is enabled, the following role may also be used:
-
-```text
-roles/iap.tunnelResourceAccessor
-```
+When IAP SSH tunneling is enabled, also add `roles/iap.tunnelResourceAccessor`.
 
 Verify:
 
@@ -190,54 +126,22 @@ gcloud projects get-iam-policy "$PROJECT_ID" \
 
 ---
 
-#  Workload Identity Federation
+## Workload Identity Federation
 
-GitHub Actions authenticates to Google Cloud using GitHub's OIDC identity.
+GitHub Actions authenticates to Google Cloud using GitHub's OIDC identity — no service account JSON key and no permanent GCP credential stored in GitHub. Instead: short-lived authentication via GitHub OIDC + Workload Identity Federation.
 
-This avoids:
-
-```text
-❌ Service Account JSON key
-❌ Permanent GCP credential stored in GitHub
-```
-
-and instead uses:
-
-```text
-✅ Short-lived authentication
-✅ GitHub OIDC
-✅ Workload Identity Federation
-```
-
----
-
-# 🏊 Create the Workload Identity Pool
+### Create the Workload Identity Pool
 
 ```bash
 gcloud iam workload-identity-pools create github-pool \
   --project="$PROJECT_ID" \
   --location="global" \
   --display-name="GitHub Actions Pool"
+
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")"
 ```
 
-Retrieve the project number:
-
-```bash
-PROJECT_NUMBER="$(
-  gcloud projects describe "$PROJECT_ID" \
-    --format="value(projectNumber)"
-)"
-```
-
-Verify:
-
-```bash
-echo "$PROJECT_NUMBER"
-```
-
----
-
-# 🔌 Create the GitHub Provider
+### Create the GitHub Provider
 
 ```bash
 gcloud iam workload-identity-pools providers create-oidc github-provider \
@@ -251,40 +155,17 @@ gcloud iam workload-identity-pools providers create-oidc github-provider \
 
 The provider should be restricted to the expected GitHub repository.
 
----
+### Allow GitHub to Use the Service Account
 
-# 🔐 Allow GitHub to Use the Service Account
+The GitHub identity must receive `roles/iam.workloadIdentityUser` on the Packer service account, with the binding restricted to the intended repository:
 
-The GitHub identity must receive:
-
-```text
-roles/iam.workloadIdentityUser
+```mermaid
+flowchart LR
+    REPO[GitHub repository] --> PROVIDER[Workload Identity Provider]
+    PROVIDER -->|roles/iam.workloadIdentityUser| SA[packer-github Service Account]
 ```
 
-on the Packer service account.
-
-The binding should restrict impersonation to the intended repository.
-
-The resulting chain becomes:
-
-```text
-GitHub repository
-      │
-      ▼
-Workload Identity Provider
-      │
-      ▼
-roles/iam.workloadIdentityUser
-      │
-      ▼
-packer-github Service Account
-```
-
----
-
-#  Get the Provider Identifier
-
-Run:
+### Get the Provider Identifier
 
 ```bash
 gcloud iam workload-identity-pools providers describe github-provider \
@@ -300,27 +181,13 @@ Result format:
 projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider
 ```
 
-This full value is stored in GitHub as:
-
-```text
-GCP_WORKLOAD_IDENTITY_PROVIDER
-```
+Store this full value in GitHub as `GCP_WORKLOAD_IDENTITY_PROVIDER`.
 
 ---
 
-#  GitHub Repository Variables
+## GitHub Repository Variables
 
-Go to:
-
-```text
-Repository
-→ Settings
-→ Secrets and variables
-→ Actions
-→ Variables
-```
-
-Configure:
+Settings → Secrets and variables → Actions → Variables:
 
 | Variable | Purpose |
 |---|---|
@@ -329,54 +196,32 @@ Configure:
 | `GCP_PACKER_SERVICE_ACCOUNT` | Service account used by GitHub Actions |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Complete Workload Identity Provider identifier |
 
-Example workflow references:
-
-```yaml
-${{ vars.GCP_PROJECT_ID }}
-${{ vars.GCP_ZONE }}
-${{ vars.GCP_PACKER_SERVICE_ACCOUNT }}
-${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-```
-
-These are configuration identifiers rather than long-lived authentication secrets.
+These are configuration identifiers, not long-lived authentication secrets. Referenced in workflows as `${{ vars.GCP_PROJECT_ID }}`, `${{ vars.GCP_ZONE }}`, `${{ vars.GCP_PACKER_SERVICE_ACCOUNT }}`, `${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}`.
 
 ---
 
-# 🔐 GitHub OIDC Permission
-
-The workflow requires:
+## GitHub OIDC Permission & Authentication Step
 
 ```yaml
 permissions:
   contents: read
-  id-token: write
-```
+  id-token: write   # required to obtain the GitHub OIDC token for Workload Identity Federation
 
-`id-token: write` allows the job to obtain the GitHub OIDC token used for Workload Identity Federation.
+steps:
+  - name: Authenticate to Google Cloud
+    id: auth
+    uses: google-github-actions/auth@v3
+    with:
+      workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      service_account: ${{ vars.GCP_PACKER_SERVICE_ACCOUNT }}
 
----
-
-# 🔑 Authentication Step
-
-```yaml
-- name: Authenticate to Google Cloud
-  id: auth
-  uses: google-github-actions/auth@v3
-  with:
-    workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-    service_account: ${{ vars.GCP_PACKER_SERVICE_ACCOUNT }}
-```
-
-Then:
-
-```yaml
-- name: Setup Google Cloud CLI
-  uses: google-github-actions/setup-gcloud@v3
+  - name: Setup Google Cloud CLI
+    uses: google-github-actions/setup-gcloud@v3
 ```
 
 ---
 
-#  Packer Environment Variables
+## Packer Environment Variables
 
 The workflow maps GitHub configuration to Packer:
 
@@ -386,72 +231,32 @@ env:
   PKR_VAR_zone: ${{ vars.GCP_ZONE }}
 ```
 
-Packer automatically maps:
-
-```text
-PKR_VAR_project_id
-        │
-        ▼
-var.project_id
-```
-
-and:
-
-```text
-PKR_VAR_zone
-        │
-        ▼
-var.zone
-```
+Packer automatically maps `PKR_VAR_project_id → var.project_id` and `PKR_VAR_zone → var.zone`.
 
 ---
 
-#  Packer Build Configuration
-
-The GCP builder uses the official Ubuntu image family:
+## Packer Build Configuration
 
 ```hcl
 source_image_family      = "ubuntu-2404-lts-amd64"
 source_image_project_id  = ["ubuntu-os-cloud"]
-```
 
-Typical build resources:
-
-```hcl
 machine_type = "e2-medium"
-
-disk_size = 20
-disk_type = "pd-balanced"
+disk_size    = 20
+disk_type    = "pd-balanced"
 ```
 
-The resulting image naming convention is:
+Resulting image naming convention: `ubuntu-2404-golden-YYYYMMDD-HHMMSS`.
 
-```text
-ubuntu-2404-golden-YYYYMMDD-HHMMSS
-```
+## SSH Connectivity
+
+The current build can use IAP instead of a temporary external IP: `use_iap = true`.
 
 ---
 
-#  SSH Connectivity
+## Ansible Hardening
 
-The current build can use a temporary external IP:
-
-```hcl
-use_iap          = true
-```
----
-
-#  Ansible Hardening
-
-Packer executes the common hardening playbook:
-
-```text
-ansible/site.yml
-```
-
-Cloud-specific variables disable configuration that is inappropriate for the cloud image.
-
-Example:
+Packer executes the common hardening playbook `ansible/site.yml`. Cloud-specific variables disable configuration that is inappropriate for a cloud image:
 
 ```text
 packages_full_upgrade_enabled=true
@@ -465,107 +270,32 @@ This allows the same Ansible roles to support multiple platforms.
 
 ---
 
-# 🔄 Reboot
+## Reboot & Verification
 
-After hardening:
-
-```text
-Ansible
-   │
-   ▼
-Reboot
-   │
-   ▼
-SSH reconnect
-   │
-   ▼
-Verification
+```mermaid
+flowchart LR
+    A[Ansible] --> B[Reboot]
+    B --> C[SSH reconnect]
+    C --> D[Verification]
 ```
 
 If the VM fails to reconnect, the Packer build fails.
 
----
-
-# 🧪 Verification
-
-Packer executes:
-
-```text
-ansible/tests/verify.yml
-```
-
-with:
-
-```text
-ansible/tests/vars/cloud.yml
-```
-
-and:
-
-```text
-image_platform=cloud
-```
+Packer then executes `ansible/tests/verify.yml` with `ansible/tests/vars/cloud.yml` and `image_platform=cloud`.
 
 ---
 
-# 🛡️ OpenSCAP
+## OpenSCAP & Lynis
 
-The OpenSCAP datastream:
+The OpenSCAP datastream `compliance/openscap/ssg-ubuntu2404-ds.xml` is copied to the temporary VM and evaluated via `compliance/openscap/check-compliance.sh`, producing `openscap-results.xml` and `openscap-report.html`.
 
-```text
-compliance/openscap/ssg-ubuntu2404-ds.xml
-```
-
-is copied to the temporary VM.
-
-The validation script is:
-
-```text
-compliance/openscap/check-compliance.sh
-```
-
-Reports include:
-
-```text
-openscap-results.xml
-openscap-report.html
-```
+Lynis validation runs via `compliance/lynis/check-score.sh`. Current minimum score: **88**. The build fails if the required score is not reached.
 
 ---
 
-# 🔍 Lynis
+## Compliance Reports
 
-Lynis validation is performed using:
-
-```text
-compliance/lynis/check-score.sh
-```
-
-Current minimum score:
-
-```text
-88
-```
-
-The build fails if the required score is not reached.
-
----
-
-# 📥 Compliance Reports
-
-Reports are initially generated on the temporary VM under:
-
-```text
-/tmp/golden-image-validation/
-```
-
-They are downloaded by Packer into:
-
-```text
-packer/gcp/reports/golden-image-validation/
-```
-
-Example:
+Reports are generated on the temporary VM under `/tmp/golden-image-validation/` and downloaded by Packer into `packer/gcp/reports/golden-image-validation/`:
 
 ```text
 golden-image-validation/
@@ -579,154 +309,57 @@ GitHub Actions uploads the reports as workflow artifacts.
 
 ---
 
-# 🧹 Image Cleanup
+## Image Cleanup
 
-Before the final image is created, Packer executes:
-
-```text
-scripts/cleanup-image.sh
-```
-
-This prepares the VM for use as a reusable Golden Image.
+Before the final image is created, Packer executes `scripts/cleanup-image.sh`, preparing the VM for use as a reusable Golden Image.
 
 ---
 
-#  Local GCP Build
-
-GCP images can also be tested locally when the Google Cloud CLI is authenticated.
-
-Check:
+## Local GCP Build
 
 ```bash
 gcloud auth list
-```
-
-Configure:
-
-```bash
 gcloud config set project YOUR_GCP_PROJECT_ID
-```
 
-Export:
-
-```bash
 export PKR_VAR_project_id="YOUR_GCP_PROJECT_ID"
 export PKR_VAR_zone="europe-west1-b"
-```
 
-Then:
-
-```bash
 cd packer/gcp
-```
-
-Initialize:
-
-```bash
 packer init .
-```
-
-Format:
-
-```bash
 packer fmt -recursive .
-```
-
-Check:
-
-```bash
 packer fmt -check -recursive .
-```
-
-Validate:
-
-```bash
 packer validate .
-```
-
-Build:
-
-```bash
 packer build .
 ```
 
 ---
 
-# 🚀 GitHub Actions Build
+## GitHub Actions Build
 
-The automated workflow is:
+Workflow: `.github/workflows/gcp-golden-image.yml`. Run manually via GitHub → Actions → GCP Golden Image Build → Run workflow.
 
-```text
-.github/workflows/gcp-golden-image.yml
-```
-
-To start it manually:
-
-```text
-GitHub
-→ Actions
-→ GCP Golden Image Build
-→ Run workflow
-```
-
----
-
-# ✅ Pipeline
-
-A successful build executes:
-
-```text
-Checkout repository
-        │
-        ▼
-GitHub OIDC authentication
-        │
-        ▼
-Google Workload Identity
-        │
-        ▼
-Packer init
-        │
-        ▼
-Packer format check
-        │
-        ▼
-Packer validation
-        │
-        ▼
-Temporary GCP VM
-        │
-        ▼
-Ansible hardening
-        │
-        ▼
-Reboot
-        │
-        ▼
-Ansible verification
-        │
-        ▼
-OpenSCAP
-        │
-        ▼
-Lynis
-        │
-        ▼
-Compliance reports
-        │
-        ▼
-Image cleanup
-        │
-        ▼
-GCP Golden Image
-        │
-        ▼
-GitHub artifact upload
+```mermaid
+flowchart TD
+    A[Checkout repository] --> B[GitHub OIDC authentication]
+    B --> C[Google Workload Identity]
+    C --> D[Packer init]
+    D --> E[Packer format check]
+    E --> F[Packer validation]
+    F --> G[Temporary GCP VM]
+    G --> H[Ansible hardening]
+    H --> I[Reboot]
+    I --> J[Ansible verification]
+    J --> K[OpenSCAP]
+    K --> L[Lynis]
+    L --> M[Compliance reports]
+    M --> N[Image cleanup]
+    N --> O[(GCP Golden Image)]
+    O --> P[GitHub artifact upload]
 ```
 
 ---
 
-# 🔎 Verify the Image
+## Verify the Image
 
 ```bash
 gcloud compute images list \
@@ -737,92 +370,25 @@ gcloud compute images list \
 
 ---
 
-#  Troubleshooting
+## Troubleshooting
 
-## Cloud Resource Manager API Disabled
-
-```text
-Cloud Resource Manager API has not been used
-or it is disabled
-```
-
-Fix:
-
-```bash
-gcloud services enable \
-  cloudresourcemanager.googleapis.com \
-  --project="$PROJECT_ID"
-```
+| Issue | Fix |
+|---|---|
+| `Cloud Resource Manager API has not been used or it is disabled` | `gcloud services enable cloudresourcemanager.googleapis.com --project="$PROJECT_ID"` |
+| Authentication check | `gcloud auth list` then `gcloud projects describe "$PROJECT_ID"` |
+| Check service account roles | `gcloud projects get-iam-policy "$PROJECT_ID" --flatten="bindings[].members" --filter="bindings.members:serviceAccount:${SA}" --format="table(bindings.role)"` |
+| Packer formatting failure | `packer fmt -recursive .` then `packer fmt -check -recursive .` |
 
 ---
+## Related Documentation
 
-## Authentication Check
-
-```bash
-gcloud auth list
-```
-
-Then:
-
-```bash
-gcloud projects describe "$PROJECT_ID"
-```
-
----
-
-## Check Service Account Roles
-
-```bash
-gcloud projects get-iam-policy "$PROJECT_ID" \
-  --flatten="bindings[].members" \
-  --filter="bindings.members:serviceAccount:${SA}" \
-  --format="table(bindings.role)"
-```
-
----
-
-## Packer Formatting Failure
-
-Fix:
-
-```bash
-packer fmt -recursive .
-```
-
-Verify:
-
-```bash
-packer fmt -check -recursive .
-```
-
----
-
-# 🔐 Security Notes
-
-Never commit:
-
-```text
-Service Account JSON keys
-OAuth tokens
-SSH private keys
-temporary GitHub credentials
-local authentication files
-```
-
-The GCP pipeline intentionally uses **Workload Identity Federation** to avoid storing permanent Google Cloud credentials.
-
----
-
-# 📚 Related Documentation
-
-➡️ [Main Project README](../../README.md)
-
-➡️ [VirtualBox Golden Image](../virtualbox/README.md)
+- [Main Project README](../../README.md)
+- [VirtualBox Golden Image](../virtualbox/README.md)
 
 ---
 
 <div align="center">
 
-### ☁️ Keyless authentication. Automated hardening. Validated cloud images.
+### 🔐 Keyless authentication. Automated hardening. Validated cloud images.
 
 </div>
