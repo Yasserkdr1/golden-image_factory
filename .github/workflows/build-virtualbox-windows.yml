@@ -261,8 +261,23 @@ jobs:
           $keyPath = Join-Path $env:RUNNER_TEMP "golden-image-build-key"
 
           # Remove a stale key file if a previous runner process was interrupted.
+          # A previous run may have left restrictive ACLs on the file, so restore
+          # Full Control for the current runner identity before deleting it.
           if (Test-Path -LiteralPath $keyPath -PathType Leaf) {
-              Remove-Item -LiteralPath $keyPath -Force
+              Write-Host "[INFO] Removing stale Packer SSH key from a previous run."
+
+              $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+              & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Unable to restore permissions on stale Packer SSH key."
+              }
+
+              Remove-Item `
+                  -LiteralPath $keyPath `
+                  -Force `
+                  -ErrorAction Stop
           }
 
           # Persist the path for every following workflow step.
@@ -404,9 +419,9 @@ jobs:
               throw "Failed to disable ACL inheritance on the temporary SSH private key."
           }
 
-          & icacls.exe $keyPath /grant:r "${identity}:(R)" | Out-Null
+          & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
           if ($LASTEXITCODE -ne 0) {
-              throw "Failed to grant the runner identity read access to the temporary SSH private key."
+              throw "Failed to grant the runner identity Full Control on the temporary SSH private key."
           }
 
           # Parse the key without exposing it.
@@ -1468,9 +1483,30 @@ jobs:
 
           if (
               -not [string]::IsNullOrWhiteSpace($keyPath) -and
-              (Test-Path -LiteralPath $keyPath)
+              (Test-Path -LiteralPath $keyPath -PathType Leaf)
           ) {
-              Remove-Item -LiteralPath $keyPath -Force
+              Write-Host "[INFO] Removing temporary build SSH private key."
+
+              $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+              # Restore Full Control for the current runner identity in case the
+              # file still has restrictive ACLs from an interrupted run.
+              & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Unable to restore Full Control on the temporary SSH private key."
+              }
+
+              Remove-Item `
+                  -LiteralPath $keyPath `
+                  -Force `
+                  -ErrorAction SilentlyContinue
+
+              if (Test-Path -LiteralPath $keyPath -PathType Leaf) {
+                  Write-Error "Temporary SSH private key could not be removed: $keyPath"
+                  exit 1
+              }
+
               Write-Host "[OK] Temporary build SSH private key removed."
           }
           else {
