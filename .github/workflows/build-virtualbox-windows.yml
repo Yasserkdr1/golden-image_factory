@@ -1,33 +1,92 @@
+---
 # =============================================================================
 # Golden Image Factory - VirtualBox / Windows
 # =============================================================================
-# Builds the hardened Ubuntu 24.04 VirtualBox Golden Image on a Windows
-# self-hosted runner (native Packer + native VirtualBox, Ansible installed
-# temporarily inside the build VM by Packer). Validates the build, packages
-# it, auto-splits the image archive if it exceeds GitHub Release's 2 GiB
-# per-file limit, verifies the split by reconstructing + comparing SHA-256,
-# then optionally publishes a GitHub Release.
 #
-# RUNNER LABELS: self-hosted, windows, x64
+# PURPOSE
+# -------
+# Build the hardened Ubuntu 24.04 VirtualBox Golden Image on a Windows
+# self-hosted GitHub Actions runner, validate the build, package it, split the
+# image package when it exceeds GitHub Release's 2 GiB per-file limit, verify
+# the split by reconstructing the archive and comparing SHA-256, then
+# optionally publish a GitHub Release.
 #
-# REQUIRED SECRETS
-#   PACKER_SSH_PRIVATE_KEY  - matches the public key in packer/common/http/user-data
-#   PACKER_SSH_PASSWORD     - temporary build user's sudo password
-#   GRUB_PASSWORD_HASH      - grub.pbkdf2.sha512.10000....
+# ARCHITECTURE
+# ------------
+# - Host runner: Windows + native Packer + native VirtualBox.
+# - Ansible: installed temporarily INSIDE the build VM by Packer.
+# - Hardening: Packer ansible-local provisioners.
+# - Final sealing: scripts/seal-image.sh shuts down and sanitizes the image.
+# - Runtime provisioning: create-instance.ps1 / create-instance.sh.
 #
-# REQUIRED VARIABLES
-#   UBUNTU_ISO_URL_WINDOWS  - e.g. file:///C:/GoldenImage/iso/ubuntu-24.04.4-live-server-amd64.iso
-#   UBUNTU_ISO_CHECKSUM     - sha256:<64 hex chars>
+# IMPORTANT
+# ---------
+# This workflow does NOT require Ansible on the Windows host.
 #
-# INPUTS
-#   release_version        - vMAJOR.MINOR.PATCH, e.g. v1.0.0
-#   publish_release         - false = build/test/package only; true = publish (default branch only)
-#   upload_image_artifact   - also store raw OVF/VMDK as a temporary Actions artifact
+# REQUIRED SELF-HOSTED RUNNER LABELS
+# ----------------------------------
+# self-hosted, windows, x64
+#
+# REQUIRED REPOSITORY SECRETS
+# ---------------------------
+# PACKER_SSH_PRIVATE_KEY
+#   Private key matching the public key embedded in packer/common/http/user-data.
+#   GitHub stores it as a repository Secret. During a run, only a temporary
+#   local copy is written under RUNNER_TEMP; that local copy is deleted by an
+#   always() cleanup step. The GitHub Secret itself remains stored in GitHub.
+#
+# PACKER_SSH_PASSWORD
+#   Temporary build user's sudo password. It must correspond to the password
+#   hash embedded in the autoinstall user-data.
+#
+# GRUB_PASSWORD_HASH
+#   GRUB PBKDF2 SHA-512 hash, for example:
+#   grub.pbkdf2.sha512.10000....
+#
+# REQUIRED REPOSITORY VARIABLES
+# -----------------------------
+# UBUNTU_ISO_URL_WINDOWS
+#   Example for a local ISO on the self-hosted Windows runner:
+#   file:///C:/GoldenImage/iso/ubuntu-24.04.4-live-server-amd64.iso
+#
+# UBUNTU_ISO_CHECKSUM
+#   Must use Packer's format:
+#   sha256:<64 hexadecimal characters>
+#
+# MANUAL INPUTS
+# -------------
+# release_version
+#   Semantic release version, for example v1.0.0.
+#
+# publish_release
+#   false = build/test/package only. No GitHub Release is created.
+#   true  = publish a GitHub Release after every validation succeeds.
+#   Publication is allowed only from the repository's default branch.
+#
+# upload_image_artifact
+#   false = do not also store the raw OVF/VMDK as a GitHub Actions artifact.
+#   true  = upload the raw image as a temporary workflow artifact.
+#   Default is false because the VMDK is large and consumes artifact storage.
 #
 # RELEASE SIZE HANDLING
-#   Archive < 2 GiB  -> golden-image-virtualbox-vX.Y.Z.tar.gz(.sha256)
-#   Archive >= 2 GiB -> split into 1500 MiB .partNNN files + .parts.sha256
-#   Parts are reconstructed and SHA-256 verified before any upload.
+# ---------------------
+# GitHub Release assets must each be < 2 GiB.
+# The workflow creates the normal .tar.gz first.
+#
+# If archive < 2 GiB:
+#   golden-image-virtualbox-vX.Y.Z.tar.gz
+#   golden-image-virtualbox-vX.Y.Z.tar.gz.sha256
+#
+# If archive >= 2 GiB:
+#   golden-image-virtualbox-vX.Y.Z.tar.gz.part001
+#   golden-image-virtualbox-vX.Y.Z.tar.gz.part002
+#   ...
+#   golden-image-virtualbox-vX.Y.Z.tar.gz.sha256
+#   golden-image-virtualbox-vX.Y.Z.parts.sha256
+#
+# The split uses 1500 MiB chunks. Before publication, the workflow rebuilds
+# the archive from all parts and verifies that the rebuilt SHA-256 is exactly
+# equal to the original SHA-256.
 # =============================================================================
 
 name: Golden Image - VirtualBox Windows
@@ -40,20 +99,25 @@ on:
         required: true
         type: string
         default: "v1.0.0"
+
       publish_release:
         description: "Publish the GitHub Release after a successful build"
         required: true
         type: boolean
         default: false
+
       upload_image_artifact:
         description: "Also upload raw OVF/VMDK as a temporary Actions artifact"
         required: true
         type: boolean
         default: false
 
+# contents: write is required only for GitHub Release/tag operations.
+# Keeping this at workflow level lets the same workflow run in build-only mode.
 permissions:
-  contents: write # required only for Release/tag operations
+  contents: write
 
+# Only one VirtualBox image build should use this runner/repository at a time.
 concurrency:
   group: virtualbox-golden-image-windows
   cancel-in-progress: false
@@ -62,89 +126,190 @@ jobs:
   build-virtualbox-windows:
     name: Build and package VirtualBox Golden Image
     runs-on: [self-hosted, windows, x64]
+
+    # Full Ubuntu installation + hardening + compliance can take time.
     timeout-minutes: 150
+
     defaults:
       run:
+        # Use Windows PowerShell 5.1 syntax for maximum compatibility with
+        # the Windows self-hosted runner used for this project.
         shell: powershell
 
     env:
+      # -----------------------------------------------------------------------
+      # Packer variables
+      # -----------------------------------------------------------------------
+      # PKR_VAR_* variables are automatically consumed by Packer.
       PKR_VAR_iso_url: ${{ vars.UBUNTU_ISO_URL_WINDOWS }}
       PKR_VAR_iso_checksum: ${{ vars.UBUNTU_ISO_CHECKSUM }}
+
       PKR_VAR_ssh_username: "packer"
       PKR_VAR_ssh_password: ${{ secrets.PACKER_SSH_PASSWORD }}
+
+      # The private-key path is initialized in a step after the runner starts.
+      # The runner context is not available in jobs.<job_id>.env.
       PKR_VAR_grub_password_hash: ${{ secrets.GRUB_PASSWORD_HASH }}
+
+      # Unique name avoids collisions between retries/runs.
       PKR_VAR_vm_name: ubuntu-24.04-golden-ci-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # CI builds must not require a visible VirtualBox window.
       PKR_VAR_headless: "true"
+
+      # Used to protect Release publication.
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
 
     steps:
-      # ---------------------------------------------------------------------
-      # Checkout & input validation
-      # ---------------------------------------------------------------------
+      # =======================================================================
+      # 01 - Checkout
+      # =======================================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # Default clean checkout is intentional. Local ignored files such as
+          # ubuntu.auto.pkrvars.hcl must never be relied upon by CI.
           clean: true
+
+      # =======================================================================
+      # 02 - Validate workflow inputs
+      # =======================================================================
 
       - name: Validate workflow inputs
         run: |
           $ErrorActionPreference = "Stop"
+
           $version = "${{ inputs.release_version }}"
 
+          # Only vMAJOR.MINOR.PATCH is accepted.
           if ($version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
               throw "release_version must use vMAJOR.MINOR.PATCH, for example v1.0.0."
           }
 
-          if ("${{ inputs.publish_release }}" -eq "true" -and $env:GITHUB_REF -ne "refs/heads/$env:DEFAULT_BRANCH") {
-              throw "Release publication is allowed only from '$env:DEFAULT_BRANCH'. Current ref: $env:GITHUB_REF"
+          # A release is a production artifact. Build-only runs may execute from
+          # another branch, but publishing is restricted to the default branch.
+          if ("${{ inputs.publish_release }}" -eq "true") {
+              $expectedRef = "refs/heads/$env:DEFAULT_BRANCH"
+
+              if ($env:GITHUB_REF -ne $expectedRef) {
+                  throw "Release publication is allowed only from '$env:DEFAULT_BRANCH'. Current ref: $env:GITHUB_REF"
+              }
           }
 
-          Write-Host "[OK] Inputs validated. Version=$version Publish=${{ inputs.publish_release }} RawArtifact=${{ inputs.upload_image_artifact }}"
+          Write-Host "[OK] Workflow inputs validated."
+          Write-Host "Version          : $version"
+          Write-Host "Publish release  : ${{ inputs.publish_release }}"
+          Write-Host "Upload raw image : ${{ inputs.upload_image_artifact }}"
 
-      # ---------------------------------------------------------------------
-      # Runner / secrets / ISO sanity checks
-      # ---------------------------------------------------------------------
+      # =======================================================================
+      # 03 - Validate the Windows self-hosted runner
+      # =======================================================================
+
       - name: Check required host tools
         run: |
           $ErrorActionPreference = "Stop"
-          foreach ($cmd in @("git.exe","packer.exe","VBoxManage.exe","ssh.exe","ssh-keygen.exe","tar.exe")) {
-              if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-                  throw "Required command is missing from PATH: $cmd"
+
+          # No host-side Ansible is expected here.
+          $requiredCommands = @(
+              "git.exe",
+              "packer.exe",
+              "VBoxManage.exe",
+              "ssh.exe",
+              "ssh-keygen.exe",
+              "tar.exe"
+          )
+
+          foreach ($command in $requiredCommands) {
+              if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+                  throw "Required command is missing from PATH: $command"
               }
           }
-          git --version; packer version; VBoxManage --version; ssh -V; tar --version
+
+          Write-Host "---- Git ----"
+          git --version
+          if ($LASTEXITCODE -ne 0) { throw "git --version failed." }
+
+          Write-Host "---- Packer ----"
+          packer version
+          if ($LASTEXITCODE -ne 0) { throw "packer version failed." }
+
+          Write-Host "---- VirtualBox ----"
+          VBoxManage --version
+          if ($LASTEXITCODE -ne 0) { throw "VBoxManage --version failed." }
+
+          Write-Host "---- OpenSSH ----"
+          ssh -V
+          if ($LASTEXITCODE -ne 0) { throw "ssh -V failed." }
+
+          Write-Host "---- tar ----"
+          tar --version
+          if ($LASTEXITCODE -ne 0) { throw "tar --version failed." }
+
           Write-Host "[OK] Required Windows host tools are available."
 
       - name: Initialize temporary Packer SSH key path
         run: |
           $ErrorActionPreference = "Stop"
+
+          # RUNNER_TEMP is available as a normal environment variable once the
+          # self-hosted runner is executing this job.
           if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
               throw "RUNNER_TEMP is not available on this self-hosted runner."
           }
 
           $keyPath = Join-Path $env:RUNNER_TEMP "golden-image-build-key"
 
+          # Remove a stale key file if a previous runner process was interrupted.
+          # A previous run may have left restrictive ACLs on the file, so restore
+          # Full Control for the current runner identity before deleting it.
           if (Test-Path -LiteralPath $keyPath -PathType Leaf) {
               Write-Host "[INFO] Removing stale Packer SSH key from a previous run."
+
               $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
               & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "Unable to restore permissions on stale Packer SSH key." }
-              Remove-Item -LiteralPath $keyPath -Force -ErrorAction Stop
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Unable to restore permissions on stale Packer SSH key."
+              }
+
+              Remove-Item `
+                  -LiteralPath $keyPath `
+                  -Force `
+                  -ErrorAction Stop
           }
 
-          "PKR_VAR_ssh_private_key_file=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "[OK] Temporary Packer SSH key path initialized: $keyPath"
+          # Persist the path for every following workflow step.
+          # This form is compatible with Windows PowerShell 5.1.
+          "PKR_VAR_ssh_private_key_file=$keyPath" |
+              Out-File `
+                  -FilePath $env:GITHUB_ENV `
+                  -Encoding utf8 `
+                  -Append
+
+          Write-Host "[OK] Temporary Packer SSH key path initialized."
+          Write-Host "Path: $keyPath"
 
       - name: Validate required Packer variables and secrets
         run: |
           $ErrorActionPreference = "Stop"
 
-          foreach ($name in @(
-              "PKR_VAR_iso_url","PKR_VAR_iso_checksum","PKR_VAR_ssh_username",
-              "PKR_VAR_ssh_password","PKR_VAR_ssh_private_key_file",
-              "PKR_VAR_grub_password_hash","PKR_VAR_vm_name"
-          )) {
-              if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+          # Check only presence/format. Secret values are never printed.
+          $requiredVariables = @(
+              "PKR_VAR_iso_url",
+              "PKR_VAR_iso_checksum",
+              "PKR_VAR_ssh_username",
+              "PKR_VAR_ssh_password",
+              "PKR_VAR_ssh_private_key_file",
+              "PKR_VAR_grub_password_hash",
+              "PKR_VAR_vm_name"
+          )
+
+          foreach ($name in $requiredVariables) {
+              $value = [Environment]::GetEnvironmentVariable($name)
+
+              if ([string]::IsNullOrWhiteSpace($value)) {
                   throw "Required variable/secret is missing: $name"
               }
           }
@@ -152,9 +317,11 @@ jobs:
           if ($env:PKR_VAR_iso_checksum -notmatch '^sha256:[0-9a-fA-F]{64}$') {
               throw "UBUNTU_ISO_CHECKSUM must use sha256:<64 hexadecimal characters>."
           }
+
           if ($env:PKR_VAR_grub_password_hash -notmatch '^grub\.pbkdf2\.sha512\.') {
               throw "GRUB_PASSWORD_HASH does not look like a GRUB PBKDF2 SHA-512 hash."
           }
+
           if ($env:PKR_VAR_ssh_username -ne "packer") {
               throw "This Windows builder expects the temporary build user to be 'packer'."
           }
@@ -165,64 +332,103 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
+          # A remote HTTP(S) URL is left to Packer, which verifies iso_checksum.
+          # A local file:/// URL can be checked immediately on the runner.
           if ($env:PKR_VAR_iso_url -match '^file:') {
-              try { $isoUri = [System.Uri]$env:PKR_VAR_iso_url }
-              catch { throw "UBUNTU_ISO_URL_WINDOWS is not a valid file URI." }
+              try {
+                  $isoUri = [System.Uri]$env:PKR_VAR_iso_url
+              }
+              catch {
+                  throw "UBUNTU_ISO_URL_WINDOWS is not a valid file URI."
+              }
 
               $isoPath = $isoUri.LocalPath
+
               if (-not (Test-Path -LiteralPath $isoPath -PathType Leaf)) {
                   throw "Ubuntu ISO was not found on the runner: $isoPath"
               }
 
-              $expected = $env:PKR_VAR_iso_checksum.Substring(7).ToLowerInvariant()
-              $actual = (Get-FileHash -LiteralPath $isoPath -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($actual -ne $expected) {
+              Write-Host "Calculating local ISO SHA-256..."
+              $expectedHash = $env:PKR_VAR_iso_checksum.Substring(7).ToLowerInvariant()
+              $actualHash = (Get-FileHash -LiteralPath $isoPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+              if ($actualHash -ne $expectedHash) {
                   throw "Ubuntu ISO SHA-256 does not match UBUNTU_ISO_CHECKSUM."
               }
+
               Write-Host "[OK] Local Ubuntu ISO exists and SHA-256 matches."
           }
           else {
-              Write-Host "[INFO] Remote/non-file ISO source; Packer will retrieve it and validate iso_checksum."
+              Write-Host "[INFO] Remote/non-file ISO source configured."
+              Write-Host "[INFO] Packer will retrieve it and validate iso_checksum."
           }
 
       - name: Ensure VirtualBox runner is idle
         run: |
           $ErrorActionPreference = "Stop"
+
           $runningVMs = @(VBoxManage list runningvms)
-          if ($LASTEXITCODE -ne 0) { throw "Unable to query running VirtualBox VMs." }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Unable to query running VirtualBox VMs."
+          }
+
           if ($runningVMs.Count -gt 0) {
+              Write-Host "Running VirtualBox VMs:"
               $runningVMs | ForEach-Object { Write-Host "  $_" }
+
               throw "Another VirtualBox VM is already running. Stop it before starting the Golden Image build."
           }
+
           Write-Host "[OK] No other VirtualBox VMs are running."
 
-      # ---------------------------------------------------------------------
-      # Packer SSH key: materialize + verify against user-data
-      # ---------------------------------------------------------------------
+      # =======================================================================
+      # 04 - Materialize and validate the secret-backed Packer SSH key
+      # =======================================================================
+
       - name: Create temporary build SSH private key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.PACKER_SSH_PRIVATE_KEY }}
         run: |
           $ErrorActionPreference = "Stop"
+
           if ([string]::IsNullOrWhiteSpace($env:SSH_PRIVATE_KEY)) {
               throw "PACKER_SSH_PRIVATE_KEY is empty."
           }
 
           $keyPath = $env:PKR_VAR_ssh_private_key_file
-          New-Item -ItemType Directory -Path (Split-Path -Parent $keyPath) -Force | Out-Null
+          $keyDirectory = Split-Path -Parent $keyPath
 
-          $normalized = $env:SSH_PRIVATE_KEY -replace "`r`n", "`n"
+          New-Item -ItemType Directory -Path $keyDirectory -Force | Out-Null
+
+          # Normalize a multiline GitHub secret to LF and write UTF-8 without BOM.
+          $normalizedKey = $env:SSH_PRIVATE_KEY -replace "`r`n", "`n"
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-          [System.IO.File]::WriteAllText($keyPath, ($normalized.TrimEnd() + "`n"), $utf8NoBom)
 
+          [System.IO.File]::WriteAllText(
+              $keyPath,
+              ($normalizedKey.TrimEnd() + "`n"),
+              $utf8NoBom
+          )
+
+          # Restrict the temporary key ACL to the current runner identity.
           $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-          & icacls.exe $keyPath /inheritance:r | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Failed to disable ACL inheritance on the temporary SSH private key." }
-          & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Failed to grant the runner identity Full Control on the temporary SSH private key." }
 
+          & icacls.exe $keyPath /inheritance:r | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to disable ACL inheritance on the temporary SSH private key."
+          }
+
+          & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to grant the runner identity Full Control on the temporary SSH private key."
+          }
+
+          # Parse the key without exposing it.
           ssh-keygen -y -f $keyPath | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "PACKER_SSH_PRIVATE_KEY is not a valid private key." }
+          if ($LASTEXITCODE -ne 0) {
+              throw "PACKER_SSH_PRIVATE_KEY is not a valid private key."
+          }
 
           Write-Host "[OK] Temporary SSH private key created and parsed successfully."
 
@@ -230,125 +436,263 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $derivedKey = (ssh-keygen -y -f $env:PKR_VAR_ssh_private_key_file).Trim()
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($derivedKey)) {
+          $derivedKeyRaw = (ssh-keygen -y -f $env:PKR_VAR_ssh_private_key_file).Trim()
+
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($derivedKeyRaw)) {
               throw "Unable to derive the public key from PACKER_SSH_PRIVATE_KEY."
           }
 
+          # Normalize the derived public key to the canonical comparison form:
+          # "<key-type> <base64-key-data>"
+          #
+          # Some ssh-keygen/OpenSSH builds can preserve or append a comment
+          # (for example: "build_Packer"). Comments are metadata and are NOT
+          # part of the cryptographic public key, so they must not affect the
+          # key-pair comparison.
+          $derivedParts = $derivedKeyRaw -split '\s+'
+
+          if ($derivedParts.Count -lt 2) {
+              throw "The public key derived from PACKER_SSH_PRIVATE_KEY is malformed."
+          }
+
+          $derivedKey = "$($derivedParts[0]) $($derivedParts[1])"
+
           $userDataPath = "packer/common/http/user-data"
+
           if (-not (Test-Path -LiteralPath $userDataPath -PathType Leaf)) {
               throw "Autoinstall user-data is missing: $userDataPath"
           }
 
-          $keyLine = Select-String -Path $userDataPath `
+          # Find the first standard SSH public key entry in cloud-init/autoinstall.
+          $keyLine = Select-String `
+              -Path $userDataPath `
               -Pattern '^\s*-\s+(ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+)\s+\S+' |
               Select-Object -First 1
-          if (-not $keyLine) { throw "No SSH public key was found in $userDataPath." }
 
-          $parts = (($keyLine.Line -replace '^\s*-\s*', '').Trim()) -split '\s+'
-          if ($parts.Count -lt 2) { throw "The SSH public key embedded in user-data is malformed." }
+          if (-not $keyLine) {
+              throw "No SSH public key was found in $userDataPath."
+          }
+
+          # Ignore an optional comment after the public key.
+          $embedded = ($keyLine.Line -replace '^\s*-\s*', '').Trim()
+          $parts = $embedded -split '\s+'
+
+          if ($parts.Count -lt 2) {
+              throw "The SSH public key embedded in user-data is malformed."
+          }
+
           $embeddedKey = "$($parts[0]) $($parts[1])"
 
-          # Compare by SHA256 fingerprint rather than the raw string: the same
-          # key can round-trip through a GitHub Secret with a different
-          # trailing comment or whitespace and still be byte-identical key
-          # material. A raw string compare produces false-negative mismatches;
-          # the fingerprint is the correct source of truth.
-          $ascii = [System.Text.Encoding]::ASCII
-          $derivedFile = Join-Path $env:RUNNER_TEMP "packer-derived-$env:GITHUB_RUN_ID.pub"
-          $embeddedFile = Join-Path $env:RUNNER_TEMP "packer-embedded-$env:GITHUB_RUN_ID.pub"
+          # -------------------------------------------------------------------
+          # Safe SSH fingerprint diagnostic
+          #
+          # This logs ONLY public-key fingerprints. It never prints the private
+          # key, the GitHub Secret value, or the full public keys.
+          # -------------------------------------------------------------------
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+              throw "RUNNER_TEMP is unavailable for SSH fingerprint diagnostics."
+          }
+
+          $diagnosticSuffix = "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $derivedFingerprintFile = Join-Path `
+              $env:RUNNER_TEMP `
+              "packer-secret-derived-$diagnosticSuffix.pub"
+
+          $embeddedFingerprintFile = Join-Path `
+              $env:RUNNER_TEMP `
+              "packer-userdata-embedded-$diagnosticSuffix.pub"
 
           try {
-              [System.IO.File]::WriteAllText($derivedFile, "$derivedKey`n", $ascii)
-              [System.IO.File]::WriteAllText($embeddedFile, "$embeddedKey`n", $ascii)
+              $ascii = [System.Text.Encoding]::ASCII
 
-              $derivedFp = (ssh-keygen -lf $derivedFile | Out-String).Trim()
-              $embeddedFp = (ssh-keygen -lf $embeddedFile | Out-String).Trim()
-              if ($LASTEXITCODE -ne 0 -or -not $derivedFp -or -not $embeddedFp) {
-                  throw "Unable to calculate SSH key fingerprints for comparison."
+              [System.IO.File]::WriteAllText(
+                  $derivedFingerprintFile,
+                  ($derivedKey + "`n"),
+                  $ascii
+              )
+
+              [System.IO.File]::WriteAllText(
+                  $embeddedFingerprintFile,
+                  ($embeddedKey + "`n"),
+                  $ascii
+              )
+
+              $derivedFingerprint = (
+                  & ssh-keygen.exe -lf $derivedFingerprintFile 2>&1 |
+                  Out-String
+              ).Trim()
+
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($derivedFingerprint)) {
+                  throw "Unable to calculate the fingerprint of the GitHub Secret-derived public key."
               }
 
-              # Fingerprint line looks like: "256 SHA256:<hash> <comment> (ED25519)"
-              # Only the "SHA256:<hash>" token identifies the key material.
-              $derivedHash = ($derivedFp -split '\s+')[1]
-              $embeddedHash = ($embeddedFp -split '\s+')[1]
+              $embeddedFingerprint = (
+                  & ssh-keygen.exe -lf $embeddedFingerprintFile 2>&1 |
+                  Out-String
+              ).Trim()
 
-              if ($derivedHash -ne $embeddedHash) {
-                  throw "PACKER_SSH_PRIVATE_KEY does not match packer/common/http/user-data.`nSecret: $derivedHash`nuser-data: $embeddedHash"
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($embeddedFingerprint)) {
+                  throw "Unable to calculate the fingerprint of the public key embedded in user-data."
               }
 
-              Write-Host "[OK] Build private key matches the autoinstall public key ($derivedHash)."
+              Write-Host ""
+              Write-Host "============================================================"
+              Write-Host " SSH KEY FINGERPRINT DIAGNOSTIC"
+              Write-Host "============================================================"
+              Write-Host "GitHub Secret private key -> public fingerprint:"
+              Write-Host $derivedFingerprint
+              Write-Host ""
+              Write-Host "user-data embedded public key fingerprint:"
+              Write-Host $embeddedFingerprint
+              Write-Host "============================================================"
+              Write-Host ""
           }
           finally {
-              Remove-Item -LiteralPath $derivedFile, $embeddedFile -Force -ErrorAction SilentlyContinue
+              Remove-Item `
+                  -LiteralPath $derivedFingerprintFile `
+                  -Force `
+                  -ErrorAction SilentlyContinue
+
+              Remove-Item `
+                  -LiteralPath $embeddedFingerprintFile `
+                  -Force `
+                  -ErrorAction SilentlyContinue
           }
 
-      # ---------------------------------------------------------------------
-      # Build
-      # ---------------------------------------------------------------------
+          if ($derivedKey -ne $embeddedKey) {
+              throw "PACKER_SSH_PRIVATE_KEY does not match the public key embedded in packer/common/http/user-data. Compare the two fingerprints printed above."
+          }
+
+          Write-Host "[OK] Build private key matches the autoinstall public key (key type + key data)."
+
+      # =======================================================================
+      # 05 - Clean workspace outputs
+      # =======================================================================
+
       - name: Clean previous build outputs
         run: |
           $ErrorActionPreference = "Stop"
-          foreach ($path in @("packer/virtualbox/output-ubuntu","packer/virtualbox/reports")) {
-              if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+
+          $paths = @(
+              "packer/virtualbox/output-ubuntu",
+              "packer/virtualbox/reports"
+          )
+
+          foreach ($path in $paths) {
+              if (Test-Path -LiteralPath $path) {
+                  Remove-Item -LiteralPath $path -Recurse -Force
+              }
           }
-          New-Item -ItemType Directory -Path "packer/virtualbox/reports" -Force | Out-Null
+
+          New-Item `
+              -ItemType Directory `
+              -Path "packer/virtualbox/reports" `
+              -Force |
+              Out-Null
+
           Write-Host "[OK] Previous output and report directories cleaned."
+
+      # =======================================================================
+      # 06 - Packer static validation
+      # =======================================================================
 
       - name: Initialize Packer plugins
         working-directory: packer/virtualbox
         run: |
           $ErrorActionPreference = "Stop"
+
           packer init .
-          if ($LASTEXITCODE -ne 0) { throw "packer init failed." }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "packer init failed."
+          }
 
       - name: Check Packer formatting
         working-directory: packer/virtualbox
         run: |
           $ErrorActionPreference = "Stop"
+
           packer fmt -check -recursive .
-          if ($LASTEXITCODE -ne 0) { throw "Packer formatting check failed. Run 'packer fmt -recursive .' locally." }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Packer formatting check failed. Run 'packer fmt -recursive .' locally."
+          }
 
       - name: Validate Packer configuration
         working-directory: packer/virtualbox
         run: |
           $ErrorActionPreference = "Stop"
+
           packer validate .
-          if ($LASTEXITCODE -ne 0) { throw "packer validate failed." }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "packer validate failed."
+          }
+
           Write-Host "[OK] Packer configuration validated."
+
+      # =======================================================================
+      # 07 - Build the Golden Image
+      # =======================================================================
 
       - name: Build hardened Ubuntu Golden Image
         working-directory: packer/virtualbox
         run: |
           $ErrorActionPreference = "Stop"
-          # Template performs: autoinstall, temporary Ansible install, ansible-local
-          # hardening, reboot, verification, OpenSCAP/Lynis validation, report
-          # download, cleanup, then final sealing + guest shutdown.
-          packer build -color=false .
-          if ($LASTEXITCODE -ne 0) { throw "Packer Golden Image build failed." }
 
-      # ---------------------------------------------------------------------
-      # Output validation
-      # ---------------------------------------------------------------------
+          # The Packer template itself performs:
+          # - Ubuntu autoinstall
+          # - temporary Ansible installation inside the guest
+          # - ansible-local hardening
+          # - reboot
+          # - ansible-local verification
+          # - OpenSCAP / Lynis validation
+          # - report download
+          # - build cleanup
+          # - final secure sealing + guest shutdown
+          packer build -color=false .
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Packer Golden Image build failed."
+          }
+
+      # =======================================================================
+      # 08 - Validate produced OVF/VMDK and reports
+      # =======================================================================
+
       - name: Verify Golden Image output
         run: |
           $ErrorActionPreference = "Stop"
+
           $outputDirectory = "packer/virtualbox/output-ubuntu"
+
           if (-not (Test-Path -LiteralPath $outputDirectory -PathType Container)) {
               throw "Packer output directory was not created: $outputDirectory"
           }
 
           $ovfFiles = @(Get-ChildItem -LiteralPath $outputDirectory -File -Filter "*.ovf")
           $vmdkFiles = @(Get-ChildItem -LiteralPath $outputDirectory -File -Filter "*.vmdk")
-          if ($ovfFiles.Count -lt 1) { throw "No OVF file was produced." }
-          if ($vmdkFiles.Count -lt 1) { throw "No VMDK file was produced." }
 
-          foreach ($file in @($ovfFiles + $vmdkFiles)) {
-              if ($file.Length -le 0) { throw "Produced image file is empty: $($file.FullName)" }
+          if ($ovfFiles.Count -lt 1) {
+              throw "No OVF file was produced."
           }
 
+          if ($vmdkFiles.Count -lt 1) {
+              throw "No VMDK file was produced."
+          }
+
+          foreach ($file in @($ovfFiles + $vmdkFiles)) {
+              if ($file.Length -le 0) {
+                  throw "Produced image file is empty: $($file.FullName)"
+              }
+          }
+
+          Write-Host "Golden Image output:"
           Get-ChildItem -LiteralPath $outputDirectory -File |
-              Select-Object Name, @{N = "Size_MiB"; E = { [math]::Round($_.Length / 1MB, 2) } } |
+              Select-Object `
+                  Name,
+                  @{Name = "Size_MiB"; Expression = { [math]::Round($_.Length / 1MB, 2) } },
+                  @{Name = "Size_GiB"; Expression = { [math]::Round($_.Length / 1GB, 3) } } |
               Format-Table -AutoSize
 
           Write-Host "[OK] OVF/VMDK output verified."
@@ -356,31 +700,52 @@ jobs:
       - name: Verify downloaded compliance reports
         run: |
           $ErrorActionPreference = "Stop"
+
           $reportDirectory = "packer/virtualbox/reports"
+
           if (-not (Test-Path -LiteralPath $reportDirectory -PathType Container)) {
               throw "Compliance report directory is missing: $reportDirectory"
           }
 
-          $reportFiles = @(Get-ChildItem -LiteralPath $reportDirectory -Recurse -File -ErrorAction Stop)
-          if ($reportFiles.Count -lt 1) { throw "Compliance report directory is empty." }
+          $reportFiles = @(
+              Get-ChildItem -LiteralPath $reportDirectory -Recurse -File -ErrorAction Stop
+          )
 
-          $empty = @($reportFiles | Where-Object { $_.Length -le 0 })
-          if ($empty.Count -gt 0) {
-              $empty | ForEach-Object { Write-Host "  EMPTY: $($_.FullName)" }
+          if ($reportFiles.Count -lt 1) {
+              throw "Compliance report directory is empty."
+          }
+
+          $emptyReports = @($reportFiles | Where-Object { $_.Length -le 0 })
+
+          if ($emptyReports.Count -gt 0) {
+              Write-Host "Empty report files:"
+              $emptyReports | ForEach-Object { Write-Host "  $($_.FullName)" }
               throw "One or more downloaded compliance report files are empty."
           }
 
-          Write-Host "[OK] Downloaded compliance reports are present and non-empty ($($reportFiles.Count) files)."
+          Write-Host "Downloaded compliance files:"
+          $reportFiles |
+              Select-Object `
+                  FullName,
+                  @{Name = "Size_KiB"; Expression = { [math]::Round($_.Length / 1KB, 2) } } |
+              Format-Table -AutoSize
 
-      # ---------------------------------------------------------------------
-      # Package, split, verify
-      # ---------------------------------------------------------------------
+          Write-Host "[OK] Downloaded compliance reports are present and non-empty."
+
+      # =======================================================================
+      # 09 - Package release files and automatically split large image archive
+      # =======================================================================
+
       - name: Package, split and verify release assets
         id: package_release
         run: |
           $ErrorActionPreference = "Stop"
 
+          # -------------------------------------------------------------------
+          # Paths / constants
+          # -------------------------------------------------------------------
           $version = "${{ inputs.release_version }}"
+
           $releaseRoot = Join-Path $env:RUNNER_TEMP "golden-image-release"
           $imageStage = Join-Path $releaseRoot "image-package"
           $imageDirectory = Join-Path $imageStage "image"
@@ -388,73 +753,156 @@ jobs:
 
           $imageArchiveName = "golden-image-virtualbox-$version.tar.gz"
           $imageArchive = Join-Path $releaseRoot $imageArchiveName
+
           $complianceArchiveName = "golden-image-compliance-$version.tar.gz"
           $complianceArchive = Join-Path $releaseRoot $complianceArchiveName
 
+          # GitHub Release requires each asset to be strictly below 2 GiB.
           $releaseAssetLimit = 2GB
-          $chunkSize = 1500MB # comfortably below the 2 GiB limit; validated against this project's ~3 GiB archive
-          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-          if (Test-Path -LiteralPath $releaseRoot) { Remove-Item -LiteralPath $releaseRoot -Recurse -Force }
+          # 1500 MiB was chosen deliberately:
+          # - comfortably below GitHub's 2 GiB limit
+          # - already validated locally with this project's ~3 GiB archive
+          $chunkSize = 1500MB
+
+          if (Test-Path -LiteralPath $releaseRoot) {
+              Remove-Item -LiteralPath $releaseRoot -Recurse -Force
+          }
+
           New-Item -ItemType Directory -Path $imageDirectory -Force | Out-Null
           New-Item -ItemType Directory -Path $toolsDirectory -Force | Out-Null
 
-          # --- Stage user-facing package -----------------------------------
+          # -------------------------------------------------------------------
+          # Stage user-facing Golden Image package
+          # -------------------------------------------------------------------
           Copy-Item "packer/virtualbox/output-ubuntu/*.ovf" $imageDirectory
           Copy-Item "packer/virtualbox/output-ubuntu/*.vmdk" $imageDirectory
+
           Copy-Item "packer/virtualbox/scripts/create-instance.ps1" $toolsDirectory
           Copy-Item "packer/virtualbox/scripts/create-instance.sh" $toolsDirectory
+
           if (Test-Path -LiteralPath "README.md" -PathType Leaf) {
               Copy-Item -LiteralPath "README.md" (Join-Path $imageStage "README.md")
           }
 
-          $manifestFiles = @(Get-ChildItem -LiteralPath $imageStage -Recurse -File | Sort-Object FullName)
-          if ($manifestFiles.Count -lt 1) { throw "Image staging directory is unexpectedly empty." }
+          # Internal SHA256SUMS validates files after the archive is extracted.
+          $manifestFiles = @(
+              Get-ChildItem -LiteralPath $imageStage -Recurse -File |
+                  Sort-Object FullName
+          )
+
+          if ($manifestFiles.Count -lt 1) {
+              throw "Image staging directory is unexpectedly empty."
+          }
 
           $checksumLines = foreach ($file in $manifestFiles) {
-              $rel = ($file.FullName.Substring($imageStage.Length).TrimStart('\', '/')) -replace '\\', '/'
+              $relativePath = $file.FullName.Substring($imageStage.Length).TrimStart('\', '/')
+              $relativePath = $relativePath -replace '\\', '/'
               $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              "$hash  $rel"
-          }
-          [System.IO.File]::WriteAllLines((Join-Path $imageStage "SHA256SUMS"), $checksumLines, $utf8NoBom)
 
-          # --- Image archive -------------------------------------------------
+              "$hash  $relativePath"
+          }
+
+          $internalChecksumPath = Join-Path $imageStage "SHA256SUMS"
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+          [System.IO.File]::WriteAllLines(
+              $internalChecksumPath,
+              $checksumLines,
+              $utf8NoBom
+          )
+
+          # -------------------------------------------------------------------
+          # Create the image archive
+          # -------------------------------------------------------------------
+          Write-Host "Creating image archive: $imageArchiveName"
+
           & tar.exe -c -z -f $imageArchive -C $imageStage .
-          if ($LASTEXITCODE -ne 0) { throw "Failed to create Golden Image archive." }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create Golden Image archive."
+          }
+
+          if (-not (Test-Path -LiteralPath $imageArchive -PathType Leaf)) {
+              throw "Image archive was not created."
+          }
+
           & tar.exe -t -z -f $imageArchive | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Golden Image archive failed tar integrity validation." }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Golden Image archive failed tar integrity validation."
+          }
 
           $imageArchiveItem = Get-Item -LiteralPath $imageArchive
           $imageArchiveHash = (Get-FileHash -LiteralPath $imageArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+
           $imageArchiveHashFile = "$imageArchive.sha256"
-          [System.IO.File]::WriteAllText($imageArchiveHashFile, "$imageArchiveHash  $imageArchiveName`n", $utf8NoBom)
 
-          Write-Host ("Image archive size: {0:N2} MiB ({1:N3} GiB)" -f ($imageArchiveItem.Length / 1MB), ($imageArchiveItem.Length / 1GB))
+          [System.IO.File]::WriteAllText(
+              $imageArchiveHashFile,
+              "$imageArchiveHash  $imageArchiveName`n",
+              $utf8NoBom
+          )
 
-          # --- Compliance archive ---------------------------------------------
-          & tar.exe -c -z -f $complianceArchive -C "packer/virtualbox" "reports"
-          if ($LASTEXITCODE -ne 0) { throw "Failed to create compliance archive." }
+          Write-Host ("Image archive size: {0:N2} MiB ({1:N3} GiB)" -f `
+              ($imageArchiveItem.Length / 1MB), `
+              ($imageArchiveItem.Length / 1GB))
+
+          # -------------------------------------------------------------------
+          # Create compliance archive
+          # -------------------------------------------------------------------
+          Write-Host "Creating compliance archive: $complianceArchiveName"
+
+          & tar.exe `
+              -c `
+              -z `
+              -f $complianceArchive `
+              -C "packer/virtualbox" `
+              "reports"
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create compliance archive."
+          }
+
           & tar.exe -t -z -f $complianceArchive | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Compliance archive failed tar integrity validation." }
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Compliance archive failed tar integrity validation."
+          }
 
           $complianceHash = (Get-FileHash -LiteralPath $complianceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
           $complianceHashFile = "$complianceArchive.sha256"
-          [System.IO.File]::WriteAllText($complianceHashFile, "$complianceHash  $complianceArchiveName`n", $utf8NoBom)
 
-          # --- Decide release assets, split if needed -------------------------
+          [System.IO.File]::WriteAllText(
+              $complianceHashFile,
+              "$complianceHash  $complianceArchiveName`n",
+              $utf8NoBom
+          )
+
+          # -------------------------------------------------------------------
+          # Decide which files will be GitHub Release assets
+          # -------------------------------------------------------------------
           $releaseAssets = New-Object System.Collections.Generic.List[string]
           $wasSplit = $false
 
+          # The full archive may be uploaded directly only when it is < 2 GiB.
           if ($imageArchiveItem.Length -lt $releaseAssetLimit) {
-              Write-Host "[INFO] Image archive is below 2 GiB; no split required."
+              Write-Host "[INFO] Image archive is below 2 GiB; no split is required."
+
               $releaseAssets.Add($imageArchive)
               $releaseAssets.Add($imageArchiveHashFile)
           }
           else {
               $wasSplit = $true
-              Write-Host "[INFO] Image archive exceeds 2 GiB; splitting into 1500 MiB parts."
 
+              Write-Host "[INFO] Image archive exceeds GitHub's 2 GiB per-asset limit."
+              Write-Host "[INFO] Splitting into 1500 MiB parts."
+
+              # ---------------------------------------------------------------
+              # Split archive byte-for-byte.
+              # ---------------------------------------------------------------
               $inputStream = [System.IO.File]::OpenRead($imageArchive)
+
               try {
                   $buffer = New-Object byte[] (4MB)
                   $partNumber = 1
@@ -462,105 +910,226 @@ jobs:
                   while ($inputStream.Position -lt $inputStream.Length) {
                       $partName = "{0}.part{1:D3}" -f $imageArchiveName, $partNumber
                       $partPath = Join-Path $releaseRoot $partName
+
                       $outputStream = [System.IO.File]::Create($partPath)
 
                       try {
                           $written = 0L
-                          while ($written -lt $chunkSize -and $inputStream.Position -lt $inputStream.Length) {
-                              $readSize = [Math]::Min($buffer.Length, $chunkSize - $written)
-                              $bytesRead = $inputStream.Read($buffer, 0, [int]$readSize)
-                              if ($bytesRead -le 0) { break }
-                              $outputStream.Write($buffer, 0, $bytesRead)
+
+                          while (
+                              $written -lt $chunkSize -and
+                              $inputStream.Position -lt $inputStream.Length
+                          ) {
+                              $remaining = $chunkSize - $written
+                              $readSize = [Math]::Min($buffer.Length, $remaining)
+
+                              $bytesRead = $inputStream.Read(
+                                  $buffer,
+                                  0,
+                                  [int]$readSize
+                              )
+
+                              if ($bytesRead -le 0) {
+                                  break
+                              }
+
+                              $outputStream.Write(
+                                  $buffer,
+                                  0,
+                                  $bytesRead
+                              )
+
                               $written += $bytesRead
                           }
                       }
-                      finally { $outputStream.Dispose() }
+                      finally {
+                          $outputStream.Dispose()
+                      }
 
                       $partItem = Get-Item -LiteralPath $partPath
-                      if ($partItem.Length -ge $releaseAssetLimit) { throw "Split part still exceeds 2 GiB: $partName" }
 
-                      Write-Host ("Created {0} - {1:N2} MiB" -f $partName, ($partItem.Length / 1MB))
+                      if ($partItem.Length -ge $releaseAssetLimit) {
+                          throw "Split part still exceeds GitHub's 2 GiB limit: $partName"
+                      }
+
+                      Write-Host ("Created {0} - {1:N2} MiB" -f `
+                          $partName, `
+                          ($partItem.Length / 1MB))
+
                       $releaseAssets.Add($partPath)
                       $partNumber++
                   }
               }
-              finally { $inputStream.Dispose() }
-
-              $partFiles = @(Get-ChildItem -LiteralPath $releaseRoot -File -Filter "$imageArchiveName.part*" | Sort-Object Name)
-              if ($partFiles.Count -lt 2) { throw "Archive exceeded 2 GiB but fewer than two split parts were created." }
-
-              $partsChecksumPath = Join-Path $releaseRoot "golden-image-virtualbox-$version.parts.sha256"
-              $partChecksumLines = foreach ($part in $partFiles) {
-                  $hash = (Get-FileHash -LiteralPath $part.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-                  "$hash  $($part.Name)"
+              finally {
+                  $inputStream.Dispose()
               }
-              [System.IO.File]::WriteAllLines($partsChecksumPath, $partChecksumLines, $utf8NoBom)
 
-              # Reconstruct before publication to prove the parts reproduce the exact original bytes.
+              $partFiles = @(
+                  Get-ChildItem `
+                      -LiteralPath $releaseRoot `
+                      -File `
+                      -Filter "$imageArchiveName.part*" |
+                      Sort-Object Name
+              )
+
+              if ($partFiles.Count -lt 2) {
+                  throw "Archive exceeded 2 GiB but fewer than two split parts were created."
+              }
+
+              # ---------------------------------------------------------------
+              # Generate SHA-256 for every split part.
+              # ---------------------------------------------------------------
+              $partsChecksumPath = Join-Path $releaseRoot "golden-image-virtualbox-$version.parts.sha256"
+
+              $partChecksumLines = foreach ($part in $partFiles) {
+                  $partHash = (Get-FileHash -LiteralPath $part.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                  "$partHash  $($part.Name)"
+              }
+
+              [System.IO.File]::WriteAllLines(
+                  $partsChecksumPath,
+                  $partChecksumLines,
+                  $utf8NoBom
+              )
+
+              # ---------------------------------------------------------------
+              # Reconstruct the split archive BEFORE publication.
+              # This proves the parts can reproduce the exact original bytes.
+              # ---------------------------------------------------------------
               $rebuiltArchive = Join-Path $releaseRoot "$imageArchiveName.rebuilt"
-              if (Test-Path -LiteralPath $rebuiltArchive) { Remove-Item -LiteralPath $rebuiltArchive -Force }
+
+              if (Test-Path -LiteralPath $rebuiltArchive) {
+                  Remove-Item -LiteralPath $rebuiltArchive -Force
+              }
 
               $rebuiltStream = [System.IO.File]::Create($rebuiltArchive)
+
               try {
                   foreach ($part in $partFiles) {
                       $partStream = [System.IO.File]::OpenRead($part.FullName)
-                      try { $partStream.CopyTo($rebuiltStream) } finally { $partStream.Dispose() }
+
+                      try {
+                          $partStream.CopyTo($rebuiltStream)
+                      }
+                      finally {
+                          $partStream.Dispose()
+                      }
                   }
               }
-              finally { $rebuiltStream.Dispose() }
+              finally {
+                  $rebuiltStream.Dispose()
+              }
 
               $rebuiltHash = (Get-FileHash -LiteralPath $rebuiltArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+
               if ($rebuiltHash -ne $imageArchiveHash) {
                   throw "Split verification failed: rebuilt archive SHA-256 differs from the original archive."
               }
-              & tar.exe -t -z -f $rebuiltArchive | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "Split verification failed: rebuilt archive is not a valid tar.gz archive." }
 
-              Write-Host "[OK] Split archive reconstructed and SHA-256 matches the original."
+              # The rebuilt archive should also be a valid gzip/tar archive.
+              & tar.exe -t -z -f $rebuiltArchive | Out-Null
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Split verification failed: rebuilt archive is not a valid tar.gz archive."
+              }
+
+              Write-Host "[OK] Split archive reconstructed successfully."
+              Write-Host "[OK] Rebuilt SHA-256 exactly matches the original archive."
+
               Remove-Item -LiteralPath $rebuiltArchive -Force
 
+              # We upload parts, not the >2 GiB original archive.
               $releaseAssets.Add($imageArchiveHashFile)
               $releaseAssets.Add($partsChecksumPath)
           }
 
+          # Compliance package is small enough in normal operation, but enforce
+          # GitHub's limit rather than assuming.
           foreach ($path in @($complianceArchive, $complianceHashFile)) {
               $item = Get-Item -LiteralPath $path
-              if ($item.Length -ge $releaseAssetLimit) { throw "Release asset exceeds 2 GiB: $($item.Name)" }
+
+              if ($item.Length -ge $releaseAssetLimit) {
+                  throw "Release asset exceeds GitHub's 2 GiB limit: $($item.Name)"
+              }
+
               $releaseAssets.Add($path)
           }
 
-          if ($releaseAssets.Count -lt 1) { throw "No release assets were selected." }
-          foreach ($assetPath in $releaseAssets) {
-              if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Release asset does not exist: $assetPath" }
-              $asset = Get-Item -LiteralPath $assetPath
-              if ($asset.Length -le 0) { throw "Release asset is empty: $($asset.Name)" }
-              if ($asset.Length -ge $releaseAssetLimit) { throw "Release asset is >= 2 GiB and cannot be uploaded: $($asset.Name)" }
+          # -------------------------------------------------------------------
+          # Final release-asset validation
+          # -------------------------------------------------------------------
+          if ($releaseAssets.Count -lt 1) {
+              throw "No release assets were selected."
           }
 
-          $releaseAssetManifest = Join-Path $releaseRoot "release-assets.txt"
-          [System.IO.File]::WriteAllLines($releaseAssetManifest, $releaseAssets, $utf8NoBom)
+          foreach ($assetPath in $releaseAssets) {
+              if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
+                  throw "Release asset does not exist: $assetPath"
+              }
 
-          # --- Release notes ---------------------------------------------------
+              $asset = Get-Item -LiteralPath $assetPath
+
+              if ($asset.Length -le 0) {
+                  throw "Release asset is empty: $($asset.Name)"
+              }
+
+              if ($asset.Length -ge $releaseAssetLimit) {
+                  throw "Release asset is >= 2 GiB and cannot be uploaded: $($asset.Name)"
+              }
+          }
+
+          # Save the exact list used later by the publication step.
+          $releaseAssetManifest = Join-Path $releaseRoot "release-assets.txt"
+
+          [System.IO.File]::WriteAllLines(
+              $releaseAssetManifest,
+              $releaseAssets,
+              $utf8NoBom
+          )
+
+          # -------------------------------------------------------------------
+          # Generate release body / reconstruction instructions
+          # -------------------------------------------------------------------
           $releaseNotesPath = Join-Path $releaseRoot "release-notes.md"
+
           if ($wasSplit) {
               $notes = @"
           ## Golden Image VirtualBox $version
 
-          The image archive exceeds GitHub's 2 GiB per-file Release limit, so it is published in numbered parts.
+          The Golden Image archive is larger than GitHub's 2 GiB per-file Release limit, so it is published in numbered parts.
 
-          ### Windows PowerShell
+          ### Windows PowerShell - rebuild the archive
+
           ```powershell
           `$parts = Get-ChildItem .\golden-image-virtualbox-$version.tar.gz.part* | Sort-Object Name
           `$output = [System.IO.File]::Create(".\golden-image-virtualbox-$version.tar.gz")
-          try { foreach (`$p in `$parts) { `$s = [System.IO.File]::OpenRead(`$p.FullName); try { `$s.CopyTo(`$output) } finally { `$s.Dispose() } } }
-          finally { `$output.Dispose() }
+
+          try {
+              foreach (`$part in `$parts) {
+                  `$input = [System.IO.File]::OpenRead(`$part.FullName)
+
+                  try {
+                      `$input.CopyTo(`$output)
+                  }
+                  finally {
+                      `$input.Dispose()
+                  }
+              }
+          }
+          finally {
+              `$output.Dispose()
+          }
+
           Get-FileHash .\golden-image-virtualbox-$version.tar.gz -Algorithm SHA256
           tar.exe -xzf .\golden-image-virtualbox-$version.tar.gz
           ```
-          Compare the resulting SHA-256 with ``golden-image-virtualbox-$version.tar.gz.sha256``.
-          ``golden-image-virtualbox-$version.parts.sha256`` lists the SHA-256 of every individual part.
 
-          ### Linux
+          Compare the resulting SHA-256 with `golden-image-virtualbox-$version.tar.gz.sha256`.
+
+          `golden-image-virtualbox-$version.parts.sha256` contains the SHA-256 of every individual part.
+
+          ### Linux - rebuild the archive
+
           ```bash
           cat golden-image-virtualbox-$version.tar.gz.part* > golden-image-virtualbox-$version.tar.gz
           sha256sum golden-image-virtualbox-$version.tar.gz
@@ -568,40 +1137,66 @@ jobs:
           ```
 
           ### Package contents
-          OVF/VMDK, runtime instance scripts, README when available, and an internal ``SHA256SUMS``.
-          A separate compliance archive contains the hardened build's reports.
+
+          The reconstructed image package contains the OVF/VMDK, runtime instance scripts, README when available, and internal `SHA256SUMS`.
+
+          A separate compliance archive contains the reports downloaded from the hardened build.
           "@
           }
           else {
               $notes = @"
           ## Golden Image VirtualBox $version
 
-          Download ``golden-image-virtualbox-$version.tar.gz`` and verify it with ``golden-image-virtualbox-$version.tar.gz.sha256``.
+          Download `golden-image-virtualbox-$version.tar.gz` and verify it with `golden-image-virtualbox-$version.tar.gz.sha256`.
+
           ```powershell
           Get-FileHash .\golden-image-virtualbox-$version.tar.gz -Algorithm SHA256
           tar.exe -xzf .\golden-image-virtualbox-$version.tar.gz
           ```
-          The package contains the OVF/VMDK, runtime instance scripts, README when available, and an internal ``SHA256SUMS``.
-          A separate compliance archive contains the hardened build's reports.
+
+          The image package contains the OVF/VMDK, runtime instance scripts, README when available, and internal `SHA256SUMS`.
+
+          A separate compliance archive contains the reports downloaded from the hardened build.
           "@
           }
 
-          $notes = ($notes -split "`r?`n" | ForEach-Object { $_ -replace '^\s{10}', '' }) -join "`n"
-          [System.IO.File]::WriteAllText($releaseNotesPath, ($notes.Trim() + "`n"), $utf8NoBom)
+          # Remove indentation introduced by the YAML/PowerShell layout.
+          $notes = ($notes -split "`r?`n" | ForEach-Object {
+              $_ -replace '^\s{10}', ''
+          }) -join "`n"
 
-          "was_split=$($wasSplit.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "image_archive_size=$($imageArchiveItem.Length)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          [System.IO.File]::WriteAllText(
+              $releaseNotesPath,
+              ($notes.Trim() + "`n"),
+              $utf8NoBom
+          )
 
-          Write-Host "`nRelease assets:"
+          # -------------------------------------------------------------------
+          # Job outputs and summary
+          # -------------------------------------------------------------------
+          "was_split=$($wasSplit.ToString().ToLowerInvariant())" |
+              Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          "image_archive_size=$($imageArchiveItem.Length)" |
+              Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Write-Host ""
+          Write-Host "Release assets:"
           foreach ($assetPath in $releaseAssets) {
               $asset = Get-Item -LiteralPath $assetPath
-              Write-Host ("  {0,-70} {1,10:N2} MiB" -f $asset.Name, ($asset.Length / 1MB))
-          }
-          Write-Host "`n[OK] Release package preparation and validation completed."
 
-      # ---------------------------------------------------------------------
-      # Temporary Actions artifacts
-      # ---------------------------------------------------------------------
+              Write-Host ("  {0,-70} {1,10:N2} MiB" -f `
+                  $asset.Name, `
+                  ($asset.Length / 1MB))
+          }
+
+          Write-Host ""
+          Write-Host "[OK] Release package preparation and validation completed."
+
+      # =======================================================================
+      # 10 - Temporary GitHub Actions artifacts
+      # =======================================================================
+
       - name: Upload raw OVF/VMDK workflow artifact
         if: ${{ inputs.upload_image_artifact }}
         uses: actions/upload-artifact@v4
@@ -610,7 +1205,10 @@ jobs:
           path: packer/virtualbox/output-ubuntu/
           if-no-files-found: error
           retention-days: 14
-          compression-level: 0 # VMDK is already effectively compressed
+
+          # Local testing showed the VMDK is already effectively compressed.
+          # Avoid wasting CPU trying to recompress it in the Actions artifact.
+          compression-level: 0
 
       - name: Upload compliance reports workflow artifact
         uses: actions/upload-artifact@v4
@@ -620,9 +1218,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # ---------------------------------------------------------------------
-      # Publish GitHub Release (optional)
-      # ---------------------------------------------------------------------
+      # =======================================================================
+      # 11 - Publish GitHub Release (optional)
+      # =======================================================================
+
       - name: Publish GitHub Release
         if: ${{ inputs.publish_release }}
         env:
@@ -632,17 +1231,30 @@ jobs:
 
           $version = "${{ inputs.release_version }}"
           $repository = $env:GITHUB_REPOSITORY
+
           $releaseRoot = Join-Path $env:RUNNER_TEMP "golden-image-release"
           $releaseAssetManifest = Join-Path $releaseRoot "release-assets.txt"
           $releaseNotesPath = Join-Path $releaseRoot "release-notes.md"
 
-          if (-not (Test-Path -LiteralPath $releaseAssetManifest -PathType Leaf)) { throw "Release asset manifest is missing." }
-          if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) { throw "Release notes file is missing." }
+          if (-not (Test-Path -LiteralPath $releaseAssetManifest -PathType Leaf)) {
+              throw "Release asset manifest is missing."
+          }
 
-          $assets = @(Get-Content -LiteralPath $releaseAssetManifest | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-          if ($assets.Count -lt 1) { throw "Release asset manifest is empty." }
+          if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) {
+              throw "Release notes file is missing."
+          }
+
+          $assets = @(
+              Get-Content -LiteralPath $releaseAssetManifest |
+                  Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+
+          if ($assets.Count -lt 1) {
+              throw "Release asset manifest is empty."
+          }
 
           $apiBase = "https://api.github.com/repos/$repository"
+
           $headers = @{
               Authorization = "Bearer $env:GITHUB_TOKEN"
               Accept = "application/vnd.github+json"
@@ -650,133 +1262,302 @@ jobs:
               "User-Agent" = "golden-image-factory-github-actions"
           }
 
-          function Get-HttpStatusCode($ErrorRecord) {
-              if ($ErrorRecord.Exception.Response.StatusCode) { return [int]$ErrorRecord.Exception.Response.StatusCode }
+          # -------------------------------------------------------------------
+          # Helper: identify HTTP status code from an Invoke-RestMethod error.
+          # -------------------------------------------------------------------
+          function Get-HttpStatusCode {
+              param(
+                  [Parameter(Mandatory = $true)]
+                  $ErrorRecord
+              )
+
+              if (
+                  $ErrorRecord.Exception -and
+                  $ErrorRecord.Exception.Response -and
+                  $ErrorRecord.Exception.Response.StatusCode
+              ) {
+                  return [int]$ErrorRecord.Exception.Response.StatusCode
+              }
+
               return $null
           }
 
-          # Version names are immutable: refuse to overwrite an existing release or tag.
+          # -------------------------------------------------------------------
+          # Refuse to overwrite an existing release OR tag.
+          # Version names are immutable in this workflow.
+          # -------------------------------------------------------------------
           try {
-              Invoke-RestMethod -Uri "$apiBase/releases/tags/$version" -Headers $headers -Method Get -ErrorAction Stop | Out-Null
+              Invoke-RestMethod `
+                  -Uri "$apiBase/releases/tags/$version" `
+                  -Headers $headers `
+                  -Method Get `
+                  -ErrorAction Stop |
+                  Out-Null
+
               throw "GitHub Release '$version' already exists. Choose a new release_version."
           }
           catch {
-              if ((Get-HttpStatusCode $_) -ne 404) { throw }
+              $status = Get-HttpStatusCode -ErrorRecord $_
+
+              if ($status -ne 404) {
+                  if ($_.Exception.Message -like "GitHub Release*already exists*") {
+                      throw
+                  }
+
+                  throw
+              }
           }
+
           try {
-              Invoke-RestMethod -Uri "$apiBase/git/ref/tags/$version" -Headers $headers -Method Get -ErrorAction Stop | Out-Null
+              Invoke-RestMethod `
+                  -Uri "$apiBase/git/ref/tags/$version" `
+                  -Headers $headers `
+                  -Method Get `
+                  -ErrorAction Stop |
+                  Out-Null
+
               throw "Git tag '$version' already exists. Choose a new release_version."
           }
           catch {
-              if ((Get-HttpStatusCode $_) -ne 404) { throw }
+              $status = Get-HttpStatusCode -ErrorRecord $_
+
+              if ($status -ne 404) {
+                  if ($_.Exception.Message -like "Git tag*already exists*") {
+                      throw
+                  }
+
+                  throw
+              }
           }
 
-          # Draft first; only flip to published once every asset upload succeeds.
+          # -------------------------------------------------------------------
+          # Create a DRAFT release first.
+          #
+          # The release remains unpublished until every asset upload succeeds.
+          # -------------------------------------------------------------------
+          $releaseBody = Get-Content -LiteralPath $releaseNotesPath -Raw
+
           $createBody = @{
               tag_name = $version
               target_commitish = $env:GITHUB_SHA
               name = "Golden Image $version"
-              body = (Get-Content -LiteralPath $releaseNotesPath -Raw)
+              body = $releaseBody
               draft = $true
               prerelease = $false
               generate_release_notes = $true
           } | ConvertTo-Json -Depth 10
 
+          $release = $null
           $releaseId = $null
 
           try {
-              $release = Invoke-RestMethod -Uri "$apiBase/releases" -Headers $headers -Method Post -ContentType "application/json" -Body $createBody -ErrorAction Stop
+              $release = Invoke-RestMethod `
+                  -Uri "$apiBase/releases" `
+                  -Headers $headers `
+                  -Method Post `
+                  -ContentType "application/json" `
+                  -Body $createBody `
+                  -ErrorAction Stop
+
               $releaseId = $release.id
-              if (-not $releaseId) { throw "GitHub created a release response without a release ID." }
+
+              if (-not $releaseId) {
+                  throw "GitHub created a release response without a release ID."
+              }
+
               Write-Host "[OK] Draft release created: $version"
 
-              # Stream each asset (StreamContent avoids loading a 1.5 GiB part into memory).
+              # ---------------------------------------------------------------
+              # Stream each potentially large asset with HttpClient.
+              #
+              # StreamContent avoids loading a 1.5 GiB split part into memory.
+              # ---------------------------------------------------------------
               Add-Type -AssemblyName System.Net.Http
+
               $httpClient = New-Object System.Net.Http.HttpClient
               $httpClient.Timeout = [TimeSpan]::FromHours(4)
-              $httpClient.DefaultRequestHeaders.Authorization = New-Object System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $env:GITHUB_TOKEN)
-              $httpClient.DefaultRequestHeaders.Accept.Add((New-Object System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/vnd.github+json")))
-              $httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2026-03-10")
-              $httpClient.DefaultRequestHeaders.Add("User-Agent", "golden-image-factory-github-actions")
+
+              $httpClient.DefaultRequestHeaders.Authorization = `
+                  New-Object System.Net.Http.Headers.AuthenticationHeaderValue(
+                      "Bearer",
+                      $env:GITHUB_TOKEN
+                  )
+
+              $httpClient.DefaultRequestHeaders.Accept.Add(
+                  (New-Object System.Net.Http.Headers.MediaTypeWithQualityHeaderValue(
+                      "application/vnd.github+json"
+                  ))
+              )
+
+              $httpClient.DefaultRequestHeaders.Add(
+                  "X-GitHub-Api-Version",
+                  "2026-03-10"
+              )
+
+              $httpClient.DefaultRequestHeaders.Add(
+                  "User-Agent",
+                  "golden-image-factory-github-actions"
+              )
 
               try {
                   $uploadBase = $release.upload_url -replace '\{\?name,label\}$', ''
 
                   foreach ($assetPath in $assets) {
-                      if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Release asset disappeared before upload: $assetPath" }
-                      $asset = Get-Item -LiteralPath $assetPath
-                      if ($asset.Length -ge 2GB) { throw "Refusing to upload asset >= 2 GiB: $($asset.Name)" }
+                      if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
+                          throw "Release asset disappeared before upload: $assetPath"
+                      }
 
-                      $uploadUri = "${uploadBase}?name=$([System.Uri]::EscapeDataString($asset.Name))"
-                      Write-Host ("Uploading {0} ({1:N2} MiB)..." -f $asset.Name, ($asset.Length / 1MB))
+                      $asset = Get-Item -LiteralPath $assetPath
+
+                      if ($asset.Length -ge 2GB) {
+                          throw "Refusing to upload asset >= 2 GiB: $($asset.Name)"
+                      }
+
+                      $encodedName = [System.Uri]::EscapeDataString($asset.Name)
+                      $uploadUri = "${uploadBase}?name=${encodedName}"
+
+                      Write-Host ("Uploading {0} ({1:N2} MiB)..." -f `
+                          $asset.Name, `
+                          ($asset.Length / 1MB))
 
                       $fileStream = [System.IO.File]::OpenRead($asset.FullName)
+
                       try {
                           $content = New-Object System.Net.Http.StreamContent($fileStream)
+
                           try {
-                              $content.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream")
-                              $response = $httpClient.PostAsync($uploadUri, $content).GetAwaiter().GetResult()
+                              $content.Headers.ContentType = `
+                                  New-Object System.Net.Http.Headers.MediaTypeHeaderValue(
+                                      "application/octet-stream"
+                                  )
+
+                              $response = $httpClient.PostAsync(
+                                  $uploadUri,
+                                  $content
+                              ).GetAwaiter().GetResult()
+
                               try {
                                   if (-not $response.IsSuccessStatusCode) {
-                                      $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-                                      throw "Asset upload failed for '$($asset.Name)': HTTP $([int]$response.StatusCode) $($response.ReasonPhrase). $body"
+                                      $responseBody = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+
+                                      throw "Asset upload failed for '$($asset.Name)': HTTP $([int]$response.StatusCode) $($response.ReasonPhrase). $responseBody"
                                   }
                               }
-                              finally { $response.Dispose() }
+                              finally {
+                                  $response.Dispose()
+                              }
                           }
-                          finally { $content.Dispose() }
+                          finally {
+                              $content.Dispose()
+                          }
                       }
-                      finally { $fileStream.Dispose() }
+                      finally {
+                          $fileStream.Dispose()
+                      }
 
                       Write-Host "[OK] Uploaded: $($asset.Name)"
                   }
               }
-              finally { $httpClient.Dispose() }
+              finally {
+                  $httpClient.Dispose()
+              }
 
-              $publishBody = @{ draft = $false; make_latest = "true" } | ConvertTo-Json
-              $published = Invoke-RestMethod -Uri "$apiBase/releases/$releaseId" -Headers $headers -Method Patch -ContentType "application/json" -Body $publishBody -ErrorAction Stop
+              # ---------------------------------------------------------------
+              # All assets are uploaded: publish the draft.
+              # ---------------------------------------------------------------
+              $publishBody = @{
+                  draft = $false
+                  make_latest = "true"
+              } | ConvertTo-Json
 
-              Write-Host "`n[OK] GitHub Release published: $($published.html_url)"
+              $publishedRelease = Invoke-RestMethod `
+                  -Uri "$apiBase/releases/$releaseId" `
+                  -Headers $headers `
+                  -Method Patch `
+                  -ContentType "application/json" `
+                  -Body $publishBody `
+                  -ErrorAction Stop
+
+              Write-Host ""
+              Write-Host "[OK] GitHub Release published successfully."
+              Write-Host "Release: $($publishedRelease.html_url)"
           }
           catch {
+              # ---------------------------------------------------------------
+              # Roll back a failed draft publication.
+              #
+              # Deleting a release does not reliably imply deletion of the tag,
+              # so both are handled explicitly. The workflow already confirmed
+              # that neither existed before creation.
+              # ---------------------------------------------------------------
               Write-Warning "Release publication failed. Attempting rollback."
 
               if ($releaseId) {
                   try {
-                      Invoke-RestMethod -Uri "$apiBase/releases/$releaseId" -Headers $headers -Method Delete -ErrorAction Stop | Out-Null
+                      Invoke-RestMethod `
+                          -Uri "$apiBase/releases/$releaseId" `
+                          -Headers $headers `
+                          -Method Delete `
+                          -ErrorAction Stop |
+                          Out-Null
+
                       Write-Warning "Draft release removed."
                   }
-                  catch { Write-Warning "Unable to remove the failed draft release automatically." }
+                  catch {
+                      Write-Warning "Unable to remove the failed draft release automatically."
+                  }
               }
 
               try {
-                  Invoke-RestMethod -Uri "$apiBase/git/refs/tags/$version" -Headers $headers -Method Delete -ErrorAction Stop | Out-Null
+                  Invoke-RestMethod `
+                      -Uri "$apiBase/git/refs/tags/$version" `
+                      -Headers $headers `
+                      -Method Delete `
+                      -ErrorAction Stop |
+                      Out-Null
+
                   Write-Warning "Release tag removed during rollback."
               }
               catch {
-                  if ((Get-HttpStatusCode $_) -ne 404) { Write-Warning "Unable to remove the release tag automatically." }
+                  $status = Get-HttpStatusCode -ErrorRecord $_
+
+                  if ($status -ne 404) {
+                      Write-Warning "Unable to remove the release tag automatically."
+                  }
               }
 
               throw
           }
 
-      # ---------------------------------------------------------------------
-      # Always-run cleanup
-      # ---------------------------------------------------------------------
+      # =======================================================================
+      # 12 - Always clean sensitive/temporary VirtualBox resources
+      # =======================================================================
+
       - name: Remove leftover CI VirtualBox VM
         if: always()
         run: |
           $ErrorActionPreference = "Continue"
-          $vmName = $env:PKR_VAR_vm_name
-          if ([string]::IsNullOrWhiteSpace($vmName)) { Write-Host "[INFO] VM name is unavailable; skipping VM cleanup."; exit 0 }
 
-          $registered = VBoxManage list vms 2>$null | Select-String -SimpleMatch """$vmName"""
-          if ($registered) {
-              if (VBoxManage list runningvms 2>$null | Select-String -SimpleMatch """$vmName""") {
+          $vmName = $env:PKR_VAR_vm_name
+
+          if ([string]::IsNullOrWhiteSpace($vmName)) {
+              Write-Host "[INFO] VM name is unavailable; skipping VM cleanup."
+              exit 0
+          }
+
+          $registeredVM = VBoxManage list vms 2>$null |
+              Select-String -SimpleMatch """$vmName"""
+
+          if ($registeredVM) {
+              $runningVM = VBoxManage list runningvms 2>$null |
+                  Select-String -SimpleMatch """$vmName"""
+
+              if ($runningVM) {
                   Write-Host "Powering off leftover VM: $vmName"
                   VBoxManage controlvm $vmName poweroff | Out-Null
                   Start-Sleep -Seconds 3
               }
+
               Write-Host "Unregistering/deleting leftover VM: $vmName"
               VBoxManage unregistervm $vmName --delete | Out-Null
           }
@@ -788,19 +1569,35 @@ jobs:
         if: always()
         run: |
           $ErrorActionPreference = "Continue"
+
           $keyPath = $env:PKR_VAR_ssh_private_key_file
 
-          if (-not [string]::IsNullOrWhiteSpace($keyPath) -and (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
-              $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-              & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
-              if ($LASTEXITCODE -ne 0) { Write-Warning "Unable to restore Full Control on the temporary SSH private key." }
+          if (
+              -not [string]::IsNullOrWhiteSpace($keyPath) -and
+              (Test-Path -LiteralPath $keyPath -PathType Leaf)
+          ) {
+              Write-Host "[INFO] Removing temporary build SSH private key."
 
-              Remove-Item -LiteralPath $keyPath -Force -ErrorAction SilentlyContinue
+              $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+              # Restore Full Control for the current runner identity in case the
+              # file still has restrictive ACLs from an interrupted run.
+              & icacls.exe $keyPath /grant:r "${identity}:(F)" | Out-Null
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Unable to restore Full Control on the temporary SSH private key."
+              }
+
+              Remove-Item `
+                  -LiteralPath $keyPath `
+                  -Force `
+                  -ErrorAction SilentlyContinue
 
               if (Test-Path -LiteralPath $keyPath -PathType Leaf) {
                   Write-Error "Temporary SSH private key could not be removed: $keyPath"
                   exit 1
               }
+
               Write-Host "[OK] Temporary build SSH private key removed."
           }
           else {
