@@ -468,8 +468,84 @@ jobs:
 
           $embeddedKey = "$($parts[0]) $($parts[1])"
 
+          # -------------------------------------------------------------------
+          # Safe SSH fingerprint diagnostic
+          #
+          # This logs ONLY public-key fingerprints. It never prints the private
+          # key, the GitHub Secret value, or the full public keys.
+          # -------------------------------------------------------------------
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+              throw "RUNNER_TEMP is unavailable for SSH fingerprint diagnostics."
+          }
+
+          $diagnosticSuffix = "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $derivedFingerprintFile = Join-Path `
+              $env:RUNNER_TEMP `
+              "packer-secret-derived-$diagnosticSuffix.pub"
+
+          $embeddedFingerprintFile = Join-Path `
+              $env:RUNNER_TEMP `
+              "packer-userdata-embedded-$diagnosticSuffix.pub"
+
+          try {
+              $ascii = [System.Text.Encoding]::ASCII
+
+              [System.IO.File]::WriteAllText(
+                  $derivedFingerprintFile,
+                  ($derivedKey + "`n"),
+                  $ascii
+              )
+
+              [System.IO.File]::WriteAllText(
+                  $embeddedFingerprintFile,
+                  ($embeddedKey + "`n"),
+                  $ascii
+              )
+
+              $derivedFingerprint = (
+                  & ssh-keygen.exe -lf $derivedFingerprintFile 2>&1 |
+                  Out-String
+              ).Trim()
+
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($derivedFingerprint)) {
+                  throw "Unable to calculate the fingerprint of the GitHub Secret-derived public key."
+              }
+
+              $embeddedFingerprint = (
+                  & ssh-keygen.exe -lf $embeddedFingerprintFile 2>&1 |
+                  Out-String
+              ).Trim()
+
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($embeddedFingerprint)) {
+                  throw "Unable to calculate the fingerprint of the public key embedded in user-data."
+              }
+
+              Write-Host ""
+              Write-Host "============================================================"
+              Write-Host " SSH KEY FINGERPRINT DIAGNOSTIC"
+              Write-Host "============================================================"
+              Write-Host "GitHub Secret private key -> public fingerprint:"
+              Write-Host $derivedFingerprint
+              Write-Host ""
+              Write-Host "user-data embedded public key fingerprint:"
+              Write-Host $embeddedFingerprint
+              Write-Host "============================================================"
+              Write-Host ""
+          }
+          finally {
+              Remove-Item `
+                  -LiteralPath $derivedFingerprintFile `
+                  -Force `
+                  -ErrorAction SilentlyContinue
+
+              Remove-Item `
+                  -LiteralPath $embeddedFingerprintFile `
+                  -Force `
+                  -ErrorAction SilentlyContinue
+          }
+
           if ($derivedKey -ne $embeddedKey) {
-              throw "PACKER_SSH_PRIVATE_KEY does not match the public key embedded in packer/common/http/user-data."
+              throw "PACKER_SSH_PRIVATE_KEY does not match the public key embedded in packer/common/http/user-data. Compare the two fingerprints printed above."
           }
 
           Write-Host "[OK] Build private key matches the autoinstall public key."
