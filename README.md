@@ -22,6 +22,10 @@ Build, harden, validate and deliver secure **Ubuntu 24.04 LTS Golden Images** ac
 ![CIS](https://img.shields.io/badge/CIS-Security_Benchmark-5A5A5A?style=flat-square)
 ![IaC](https://img.shields.io/badge/Infrastructure-as_Code-623CE4?style=flat-square)
 
+<br>
+
+![Roadmap](https://img.shields.io/badge/Next_Up-Proxmox_Template_(On--Prem)-orange?style=for-the-badge&logo=proxmox&logoColor=white)
+
 </div>
 
 ---
@@ -62,53 +66,25 @@ The project is designed to provide a repeatable security pipeline capable of:
 
 ---
 
-## Architecture
+## Build Lifecycle
 
-```text
-                           GitHub Repository
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │ GitHub Actions  │
-                         └────────┬────────┘
-                                  │
-                   ┌──────────────┴──────────────┐
-                   │                             │
-                   ▼                             ▼
-          ┌─────────────────┐          ┌─────────────────┐
-          │   VirtualBox    │          │      GCP        │
-          │ Local / Runner  │          │ Compute Engine  │
-          └────────┬────────┘          └────────┬────────┘
-                   │                            │
-                   └─────────────┬──────────────┘
-                                 │
-                                 ▼
-                        ┌─────────────────┐
-                        │     Packer      │
-                        └────────┬────────┘
-                                 │
-                                 ▼
-                        ┌─────────────────┐
-                        │     Ansible     │
-                        │    Hardening    │
-                        └────────┬────────┘
-                                 │
-                                 ▼
-                              Reboot
-                                 │
-                                 ▼
-                        Ansible Verification
-                                 │
-                       ┌─────────┴─────────┐
-                       ▼                   ▼
-                    Lynis              OpenSCAP
-                       │                   │
-                       └─────────┬─────────┘
-                                 ▼
-                          Security Gates
-                                 │
-                                 ▼
-                           Golden Image
+```mermaid
+flowchart TD
+    SRC[Source Image] --> PACKER[Packer]
+    PACKER --> VM[Temporary VM]
+    VM --> ANSIBLE[Ansible]
+    ANSIBLE --> HARDEN[Hardening]
+    HARDEN --> REBOOT[Reboot]
+    REBOOT --> VERIFY[Verification]
+
+    VERIFY --> LYNIS[Lynis]
+    VERIFY --> OSCAP[OpenSCAP]
+
+    LYNIS --> GATE{Compliance Gate}
+    OSCAP --> GATE
+
+    GATE --> CLEAN[Image Cleanup]
+    CLEAN --> IMAGE[(Golden Image)]
 ```
 
 ---
@@ -132,45 +108,34 @@ The project is designed to provide a repeatable security pipeline capable of:
 
 ---
 
-##  Security Hardening
+## Security Hardening
 
 The Ansible roles cover several security domains:
 
 ```text
-Authentication & PAM
-Password policies
-SSH hardening
-Sudo configuration
-Kernel hardening
-Network sysctl
-nftables firewall
-auditd
-journald / rsyslog
-AppArmor
-AIDE
-Fail2ban
-Filesystem permissions
+Authentication & PAM          Kernel module restrictions
+Password policies             GRUB hardening
+SSH hardening                 Time synchronization
+Sudo configuration            Security banners
+Kernel hardening              System cleanup
+Network sysctl                nftables firewall
+auditd                        journald / rsyslog
+AppArmor                      AIDE
+Fail2ban                      Filesystem permissions
 Mount hardening
-Kernel module restrictions
-GRUB hardening
-Time synchronization
-Security banners
-System cleanup
 ```
 
 Platform-specific features can be enabled or disabled through Ansible and Packer variables.
 
 ---
 
-##  Security Validation
+## Security Validation
 
 Hardening is followed by automated validation.
 
 ### Lynis
 
-Lynis performs a security audit of the resulting system.
-
-The current build gate requires:
+Lynis performs a security audit of the resulting system. The current build gate requires:
 
 ```text
 Lynis hardening score >= 88
@@ -180,12 +145,7 @@ A score below the required threshold causes the build to fail.
 
 ### OpenSCAP
 
-OpenSCAP evaluates Ubuntu against security compliance rules and generates:
-
-```text
-openscap-results.xml
-openscap-report.html
-```
+OpenSCAP evaluates Ubuntu against security compliance rules and generates `openscap-results.xml` and `openscap-report.html`.
 
 ### Ansible Verification
 
@@ -193,72 +153,16 @@ Post-hardening playbooks verify that security configuration has not broken essen
 
 ---
 
-## 📁 Repository Structure
 
-```text
-golden-image_factory/
-│
-├── .github/
-│   └── workflows/
-│       ├── gcp-golden-image.yml
-│       └── ...
-│
-├── ansible/
-│   ├── roles/
-│   ├── tests/
-│   │   ├── smoke.yml
-│   │   ├── security.yml
-│   │   ├── verify.yml
-│   │   └── vars/
-│   │       ├── cloud.yml
-│   │       └── virtualbox.yml
-│   ├── requirements.yml
-│   └── site.yml
-│
-├── compliance/
-│   ├── lynis/
-│   └── openscap/
-│
-├── packer/
-│   ├── virtualbox/
-│   │   └── README.md
-│   │
-│   └── gcp/
-│       └── README.md
-│
-├── scripts/
-│   └── cleanup-image.sh
-│
-├── .gitignore
-├── .gitleaks.toml
-├── .yamllint.yml
-└── README.md
-```
+#  Build Documentation
 
----
-
-# 🚀 Build Documentation
-
-Golden Image Factory currently supports two image targets.
+Golden Image Factory currently supports two image targets, with a third planned for on-premise deployments.
 
 ## 📦 VirtualBox
 
-VirtualBox supports two build modes:
+Two build modes: **local workstation build** and **GitHub Actions / compatible runner build**.
 
-- **Local workstation build**
-- **GitHub Actions / compatible runner build**
-
-The VirtualBox documentation covers:
-
-- local prerequisites
-- Ubuntu ISO configuration
-- `.env` configuration
-- GRUB password handling
-- Packer SSH credentials
-- `.pkrvars.hcl.example` configuration
-- local Packer builds
-- GitHub Actions variables and secrets
-- runner requirements
+Covers: local prerequisites, Ubuntu ISO configuration ,GRUB password handling, Packer SSH credentials, `.pkrvars.hcl.example` configuration, local Packer builds, GitHub Actions variables and secrets, runner requirements.
 
 ➡️ **[VirtualBox Golden Image Guide](packer/virtualbox/README.md)**
 
@@ -266,124 +170,71 @@ The VirtualBox documentation covers:
 
 ## ☁️ Google Cloud Platform
 
-The GCP image is built using Packer and Google Compute Engine.
+The GCP image is built using Packer and Google Compute Engine. GitHub Actions authenticates to GCP using **GitHub OIDC + Google Workload Identity Federation** — no long-lived service account JSON key required.
 
-GitHub Actions authenticates to GCP using:
-
-```text
-GitHub OIDC
-        +
-Google Workload Identity Federation
-```
-
-No long-lived service account JSON key is required.
-
-The GCP documentation covers:
-
-- required Google APIs
-- service account configuration
-- IAM roles
-- Workload Identity Pool
-- GitHub OIDC Provider
-- GitHub repository variables
-- Packer configuration
-- CI/CD execution
-- image verification
+Covers: required Google APIs, service account configuration, IAM roles, Workload Identity Pool, GitHub OIDC Provider, GitHub repository variables, Packer configuration, CI/CD execution, image verification.
 
 ➡️ **[Google Cloud Golden Image Guide](packer/gcp/README.md)**
 
 ---
 
-## 🔄 Build Lifecycle
+## Proxmox Template — Coming Next
 
-```text
-Source Image
-     │
-     ▼
-   Packer
-     │
-     ▼
-Temporary VM
-     │
-     ▼
-   Ansible
-     │
-     ▼
-  Hardening
-     │
-     ▼
-   Reboot
-     │
-     ▼
- Verification
-     │
-  ┌──┴──┐
-  ▼     ▼
-Lynis OpenSCAP
-  │     │
-  └──┬──┘
-     ▼
-Compliance Gate
-     │
-     ▼
-Image Cleanup
-     │
-     ▼
-Golden Image
+The next build target on the roadmap is **Proxmox VE**, to bring the same hardened, Packer-built, Ansible-validated pipeline to on-premise deployments. It will reuse the existing Ansible roles and compliance gates (Lynis + OpenSCAP), producing a ready-to-clone Proxmox VM template instead of an OVF/VMDK or GCE image.
+
+```mermaid
+flowchart LR
+    VB[VirtualBox<br/>done]
+    GCP[Google Cloud<br/>done]
+    PVE[Proxmox VE<br/>next]
+
+    VB -.shared Ansible roles.- PVE
+    GCP -.shared Ansible roles.- PVE
+
+    style PVE stroke-dasharray: 5 5
 ```
 
 ---
 
-## 🔐 Secrets Management
+
+## Secrets Management
 
 Sensitive credentials are never intended to be committed to Git.
 
-Depending on the target platform, secrets are supplied through:
-
-```text
-Local build
-    │
-    └── .env
-
-CI/CD build
-    │
-    └── GitHub Actions Secrets
+```mermaid
+flowchart LR
+    CICD[CI/CD build] --> SECRETS[GitHub Actions Secrets]
 ```
 
-Google Cloud builds use Workload Identity Federation instead of permanent service account keys.
-
-The repository also includes secret scanning configuration through:
-
-```text
-.gitleaks.toml
-```
+Google Cloud builds use Workload Identity Federation instead of permanent service account keys. The repository also includes secret scanning configuration through `.gitleaks.toml`.
 
 ---
 
-## 🌐 Supported Targets
+## Supported Targets
 
 | Target | Local | CI/CD | Status |
 |---|---:|---:|---:|
-| VirtualBox | ✅ | ✅ | ✅ |
-| Google Cloud | ✅ | ✅ | ✅ |
+| VirtualBox | ✅ | ✅ | Available |
+| Google Cloud | ✅ | ✅ | Available |
+| Proxmox VE | Planned | Planned | Coming next |
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Guide | Documentation |
 |---|---|
-|VirtualBox | [VirtualBox Build Guide](packer/virtualbox/README.md) |
-|Google Cloud | [GCP Build Guide](packer/gcp/README.md) |
-|Ansible | [`ansible/`](ansible/) |
-|Compliance | [`compliance/`](compliance/) |
-|CI/CD | [`.github/workflows/`](.github/workflows/) |
+| VirtualBox | [VirtualBox Build Guide](packer/virtualbox/README.md) |
+| Google Cloud | [GCP Build Guide](packer/gcp/README.md) |
+| Ansible | [`ansible/`](ansible/) |
+| Compliance | [`compliance/`](compliance/) |
+| CI/CD | [`.github/workflows/`](.github/workflows/) |
 
 ---
 
 <div align="center">
 
-### 🔐 Build once. Harden consistently. Validate automatically.
+### 🔐Build once. Harden consistently. Validate automatically.
 
 **Golden Image Factory**
 
