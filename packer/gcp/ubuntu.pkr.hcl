@@ -153,4 +153,10 @@ build {
 
     execute_command = "sudo bash '{{ .Path }}'"
   }
+
+  provisioner "shell" {
+    script = "${path.root}/../../scripts/seal-image-gcp.sh"
+
+    execute_command = "sudo bash '{{ .Path }}'"
+  }
 }
