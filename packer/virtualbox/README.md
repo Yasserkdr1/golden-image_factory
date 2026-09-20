@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📦 VirtualBox Golden Image
+# VirtualBox Golden Image
 
 ### Ubuntu 24.04 · Packer · Ansible · VirtualBox
 
@@ -13,572 +13,305 @@
 
 ---
 
-## 📖 Overview
+## Overview
 
-This directory contains the Packer configuration used to create the **Ubuntu 24.04 VirtualBox Golden Image**.
+This repository builds a **hardened Ubuntu 24.04 Golden Image** for VirtualBox, and provides a separate runtime provisioning mechanism for creating unique VM instances from that image.
 
-Two build methods are available:
+The design intentionally separates:
 
-```text
-                    VirtualBox Golden Image
-                             │
-                 ┌───────────┴───────────┐
-                 │                       │
-                 ▼                       ▼
-           Local Build              CI/CD Build
-                 │                       │
-         Developer Machine         GitHub Runner
-                 │                       │
-                 └───────────┬───────────┘
-                             ▼
-                           Packer
-                             │
-                             ▼
-                         VirtualBox
-                             │
-                             ▼
-                          Ansible
-                             │
-                             ▼
-                    Security Hardening
-                             │
-                             ▼
-                    Lynis + OpenSCAP
-                             │
-                             ▼
-                     VirtualBox Image
+1. **Build time** — Packer installs Ubuntu, applies Ansible hardening, runs compliance checks, cleans up and seals the image.
+2. **Instance runtime** — a per-instance NoCloud `seed.iso` provides hostname, runtime user, SSH key and optional GRUB credentials.
+
+```mermaid
+flowchart TD
+    subgraph BUILD["BUILD TIME"]
+        A[Ubuntu ISO] --> B[Packer + VirtualBox]
+        B --> C[NoCloud autoinstall over HTTP]
+        C --> D[Temporary 'packer' user]
+        D --> E[Ansible hardening]
+        E --> F[Verification + Lynis + OpenSCAP]
+        F --> G[Cleanup + Sealing]
+        G --> H[(Golden Image OVF/VMDK)]
+    end
+
+    subgraph RUNTIME["RUNTIME"]
+        H --> I[Clone / Import]
+        I --> J[VM instance]
+        K[seed.iso] --> J
+        J --> L[cloud-init]
+        L --> M[hostname]
+        L --> N[runtime user]
+        L --> O[SSH public key]
+        L --> P[optional GRUB override]
+        L --> Q[remove build user]
+    end
 ```
 
 ---
 
-#  Method 1 — Local Build
-
-## Prerequisites
-
-The local workstation must provide:
+## Repository Layout
 
 ```text
-Git
-Packer
-VirtualBox
-Ansible
+packer/
+├── common/http/{user-data, meta-data}
+└── virtualbox/
+    ├── ubuntu.pkr.hcl
+    ├── variables.pkr.hcl
+    ├── ubuntu.auto.pkrvars.hcl.example
+    ├── scripts/{create-instance.ps1, create-instance.sh, preflight-check.ps1}
+    └── instances/            # generated locally
+
+scripts/{cleanup-image.sh, seal-image.sh}
+compliance/{lynis/, openscap/}
 ```
 
-Check:
+---
+
+# 1. Golden Image Build
+
+## Build-Time NoCloud Configuration
+
+Packer starts a temporary HTTP server serving `packer/common/http/` and boots Ubuntu with:
+
+```text
+ds=nocloud;s=http://<PACKER_HTTP_SERVER>/
+```
+
+This build-time `user-data` creates the temporary `packer` account and installs the SSH public key required by Packer. This is **distinct** from the per-instance `seed.iso` (see section 4).
+
+## Build Pipeline
+
+```mermaid
+flowchart TD
+    A[Ubuntu ISO] --> B[Autoinstall / NoCloud]
+    B --> C[Packer SSH connection]
+    C --> D[Install Ansible inside build VM]
+    D --> E[Ansible hardening]
+    E --> F[Reboot]
+    F --> G[Ansible verification]
+    G --> H[OpenSCAP]
+    H --> I[Lynis]
+    I --> J[Download compliance reports]
+    J --> K[cleanup-image.sh]
+    K --> L[seal-image.sh]
+    L --> M[Shutdown]
+    M --> N[(OVF / VMDK Golden Image)]
+```
+
+`seal-image.sh` performs final image sanitization:
+- removes the build SSH authorization
+- locks the `packer` account (`nologin`)
+- cleans cloud-init state
+- resets the `machine-id`
+- removes SSH host keys
+- removes the system random seed
+- clears build history and temporary files
+- shuts the VM down before the final artifact is produced
+
+The `packer` account is disabled in the Golden Image and removed by cloud-init at runtime provisioning.
+
+---
+
+# 2. Local Build
+
+## Prerequisites
 
 ```bash
 git --version
 packer version
 VBoxManage --version
-ansible --version
-ansible-playbook --version
 ```
 
----
+Ansible does not need to be installed on the host — Packer installs it inside the build VM via `ansible-local`.
 
-## Clone the Repository
+## Clone & Configure
 
 ```bash
 git clone https://github.com/Yasserkdr1/golden-image_factory.git
-cd golden-image_factory
-```
-
-Install the required Ansible collections:
-
-```bash
-ansible-galaxy collection install \
-  -r ansible/requirements.yml
-```
-
----
-
-# ⚙️ Local Packer Variables
-
-A template configuration file is provided for local development.
-
-Do **not** directly edit the `.example` file.
-
-Move to the VirtualBox directory:
-
-```bash
-cd packer/virtualbox
-```
-
-Copy the example:
-
-```bash
+cd golden-image_factory/packer/virtualbox
 cp ubuntu.auto.pkrvars.hcl.example ubuntu.auto.pkrvars.hcl
-```
-
-You should now have:
-
-```text
-ubuntu.auto.pkrvars.hcl.example   ← template committed to Git
-ubuntu.auto.pkrvars.hcl           ← local configuration
-```
-
-Edit the local file:
-
-```bash
-nano ubuntu.auto.pkrvars.hcl
-```
-
-Configure the variables required by the VirtualBox Packer template, including the Ubuntu ISO location and checksum.
-
-For example:
-
-```hcl
-iso_url      = "file:///absolute/path/to/ubuntu-24.04.4-live-server-amd64.iso"
-iso_checksum = "sha256:YOUR_SHA256_CHECKSUM"
-```
-
-Use the exact variable names defined by the Packer configuration in this directory.
-
-The local `.pkrvars.hcl` file should remain excluded from Git when it contains workstation-specific values.
-
----
-
-# 🔐 Local Secrets
-
-Sensitive values are stored separately in a local:
-
-```text
-.env
-```
-
-Create it from the repository root:
-
-```bash
-nano .env
 ```
 
 Example:
 
-```bash
-GRUB_PASSWORD_HASH="grub.pbkdf2.sha512.10000.YOUR_HASH_HERE"
+```hcl
+iso_url      = "file:///absolute/path/to/ubuntu-24.04.4-live-server-amd64.iso"
+iso_checksum = "sha256:YOUR_SHA256_CHECKSUM"
+
+ssh_username         = "packer"
+ssh_password         = "YOUR_BUILD_PASSWORD"
+ssh_private_key_file = "/absolute/path/to/build_private_key"
+
+grub_password_hash = "grub.pbkdf2.sha512.10000.YOUR_HASH"
+
+vm_name  = "ubuntu-24.04-golden-test"
+headless = false
 ```
 
-The real hash must never be committed.
+> `ubuntu.auto.pkrvars.hcl` is local config and must **never** be committed. The private SSH key must match the public key in `packer/common/http/user-data`, and the build password must match the configured hash.
 
-Make sure `.env` is ignored:
-
-```bash
-git check-ignore .env
-```
-
----
-
-## Load `.env`
-
-From the repository root:
-
-```bash
-set -a
-source .env
-set +a
-```
-
-Then expose the GRUB hash to Packer:
-
-```bash
-export PKR_VAR_grub_password_hash="$GRUB_PASSWORD_HASH"
-```
-
-Verify that the variable is loaded **without printing its value**:
-
-```bash
-printf '%s\n' "${#PKR_VAR_grub_password_hash}"
-```
-
-Expected result:
-
-```text
-a non-zero number
-```
-
-This checks only the length of the secret.
-
----
-
-# 🧪 Validate the Local Build
-
-Move into:
-
-```bash
-cd packer/virtualbox
-```
-
-Initialize Packer:
+## Validate & Build
 
 ```bash
 packer init .
-```
-
-Format:
-
-```bash
 packer fmt -recursive .
-```
-
-Check formatting:
-
-```bash
 packer fmt -check -recursive .
-```
-
-Validate:
-
-```bash
 packer validate .
-```
-
----
-
-# 🚀 Build Locally
-
-Run:
-
-```bash
 packer build .
 ```
 
-The build follows:
-
-```text
-Ubuntu ISO
-    │
-    ▼
-VirtualBox VM
-    │
-    ▼
-Ubuntu Autoinstall
-    │
-    ▼
-SSH
-    │
-    ▼
-Ansible Hardening
-    │
-    ▼
-Reboot
-    │
-    ▼
-Ansible Verification
-    │
-    ▼
-Lynis + OpenSCAP
-    │
-    ▼
-Image Cleanup
-    │
-    ▼
-VirtualBox Golden Image
-```
+- Generated images → `packer/virtualbox/output-ubuntu/`
+- Compliance reports → `packer/virtualbox/reports/`
 
 ---
 
-# Method 2 — GitHub Actions / Runner
+# 3. GitHub Actions Build
 
-The VirtualBox image can also be built automatically through GitHub Actions using a compatible runner.
+Windows workflow: `.github/workflows/build-virtualbox-windows.yml`, running on a `self-hosted windows x64` runner. Packer and VirtualBox are native on the runner; Ansible runs inside the temporary Ubuntu build VM.
 
-The runner must be capable of running VirtualBox.
-
----
-
-## 🔐 Repository Secrets
-
-Go to:
-
-```text
-Repository
-→ Settings
-→ Secrets and variables
-→ Actions
-→ Secrets
-```
-
-Create the following secrets:
+## Secrets (Settings → Secrets and variables → Actions → Secrets)
 
 | Secret | Purpose |
 |---|---|
-| `GRUB_PASSWORD_HASH` | GRUB PBKDF2 password hash |
-| `PACKER_SSH_PASSWORD` | SSH password used during the Packer build |
-| `PACKER_SSH_PRIVATE_KEY` | Private SSH key used by the automated build |
+| `PACKER_SSH_PRIVATE_KEY` | Private key matching the build public key |
+| `PACKER_SSH_PASSWORD` | Temporary build user's sudo password |
+| `GRUB_PASSWORD_HASH` | GRUB PBKDF2 SHA-512 hash |
 
-These values must **never** be committed to the repository.
+The workflow writes the private key only to a temporary runner file and removes it in an `always()` cleanup step.
 
-Example workflow mapping:
-
-```yaml
-env:
-  PKR_VAR_grub_password_hash: ${{ secrets.GRUB_PASSWORD_HASH }}
-  PKR_VAR_ssh_password: ${{ secrets.PACKER_SSH_PASSWORD }}
-```
-
-The private SSH key should be handled only by the workflow step that requires it and should never be printed to the job logs.
-
----
-
-# ⚙️ Repository Variables
-
-Non-sensitive build configuration is stored under:
-
-```text
-Repository
-→ Settings
-→ Secrets and variables
-→ Actions
-→ Variables
-```
-
-The VirtualBox build uses repository variables for values such as the Ubuntu installation media.
-
-Current repository variables include:
-
-```text
-UBUNTU_ISO_URI
-UBUNTU_ISO_CHECKSUM
-```
-
-Their purpose is:
+## Variables
 
 | Variable | Purpose |
 |---|---|
-| `UBUNTU_ISO_URI` | Location of the Ubuntu 24.04 Server ISO accessible to the runner |
-| `UBUNTU_ISO_CHECKSUM` | SHA-256 checksum used by Packer to verify the ISO |
+| `UBUNTU_ISO_URL_WINDOWS` | Ubuntu ISO path/URL accessible from the Windows runner |
+| `UBUNTU_ISO_CHECKSUM` | SHA-256 checksum in Packer format |
 
-These are **variables**, not secrets.
+## Workflow Inputs
 
----
-
-## ⚠️ ISO Path and Runner Location
-
-A local URI such as:
-
-```text
-file:///home/user/os/ubuntu-24.04.4-live-server-amd64.iso
-```
-
-only works when the runner has that exact file available.
-
-Therefore:
-
-```text
-Local workstation
-       │
-       └── local ISO path ✅
-```
-
-and:
-
-```text
-Self-hosted runner
-       │
-       └── ISO must exist on that runner ✅
-```
-
-A GitHub-hosted runner cannot access a file stored only on a developer workstation.
+| Input | Purpose |
+|---|---|
+| `release_version` | Release version (e.g. `v1.0.0`) |
+| `publish_release` | Publish a GitHub Release after successful validation |
+| `upload_image_artifact` | Upload the raw OVF/VMDK as a temporary Actions artifact |
 
 ---
 
-# Runner Requirements
+# 4. Runtime Instance Provisioning
 
-The machine running the VirtualBox pipeline must provide:
+The Golden Image holds no final runtime identity. Each VM gets its configuration through a unique NoCloud `seed.iso`, generated by `create-instance.ps1` (launches the Bash script via WSL) or `create-instance.sh`.
 
-```text
-Packer
-VirtualBox
-Ansible
-hardware virtualization
-sufficient disk space
-required privileges
-Ubuntu installation media
+## WSL Prerequisites
+
+```bash
+sudo apt update
+sudo apt install -y openssl openssh-client cloud-image-utils
+sudo apt install -y grub-common   # for per-instance GRUB overrides
 ```
 
-This usually means using a:
+## Generating a Seed
 
-```text
-self-hosted GitHub Actions runner
+```powershell
+.\packer\virtualbox\scripts\create-instance.ps1
 ```
 
-for VirtualBox builds.
+The script asks for: instance name, hostname, runtime Linux user, runtime password, GRUB config, SSH config (generate a new ED25519 key pair or reuse an existing public key). The plaintext password is never written to the seed — a SHA-512 hash is generated instead. If a new private key is generated on a Windows-mounted filesystem, restrictive Windows ACLs are applied.
+
+## Generated Files (example `VM2`)
+
+```text
+packer/virtualbox/instances/VM2/
+├── user-data
+├── meta-data
+├── seed.iso
+├── id_VM2          # only if a new key pair was generated
+└── id_VM2.pub
+```
+
+**`user-data`**: runtime Linux user, password hash, sudo membership, SSH public key, optional GRUB credentials, first-boot commands. `ssh_pwauth: false` (SSH password auth disabled). At the end of first-boot provisioning, cloud-init runs `userdel -r packer`.
+
+**`meta-data`**: unique cloud-init identity and hostname —
+
+```yaml
+instance-id: <instance-name>-<unique-uuid>
+local-hostname: <hostname>
+```
+
+The unique `instance-id` ensures cloud-init treats each VM as a distinct instance.
+
+**`seed.iso`**: a small NoCloud/CIDATA configuration disk (`user-data` + `meta-data`). Contains **neither** Ubuntu nor the Golden Image. Specific to one instance — must not be reused as a generic image artifact.
 
 ---
 
-# 🔄 Local vs CI/CD
+# 5. Using `seed.iso`
 
-| Configuration | Local Build | GitHub Actions |
+```mermaid
+flowchart TD
+    A[(Golden Image)] -->|clone/import| B[New VM]
+    C[seed.iso] --> B
+    B --> D[cloud-init]
+    D --> E[set hostname]
+    D --> F[create runtime user]
+    D --> G[install SSH public key]
+    D --> H[optional GRUB override]
+    D --> I["remove 'packer'"]
+```
+
+Steps:
+1. Import or clone the Golden Image.
+2. Attach the generated `seed.iso` as an optical disk.
+3. Boot the VM — cloud-init detects the NoCloud seed and applies the config.
+4. Connect with the generated/selected SSH key: `ssh -i id_VM2 <username>@<VM-IP>`
+
+The Golden Image is sealed with `cloud-init clean`, so every new VM consumes fresh NoCloud metadata on first boot. The seed ISO can be detached once the runtime config is verified.
+
+---
+
+# 6. Build-Time Seed vs Runtime Seed
+
+| Stage | Source | Purpose |
 |---|---|---|
-| Ubuntu ISO URI | `.pkrvars.hcl` | Repository Variable |
-| Ubuntu checksum | `.pkrvars.hcl` | Repository Variable |
-| GRUB hash | `.env` | Repository Secret |
-| SSH password | local configuration | Repository Secret |
-| SSH private key | local configuration | Repository Secret |
-| Packer | Local | Runner |
-| VirtualBox | Local | Runner |
-| Ansible | Local | Runner |
-| Compliance | ✅ | ✅ |
-| Automated artifact handling | Optional | ✅ |
+| Golden Image build | `packer/common/http/user-data` | Autoinstall Ubuntu + create the temporary `packer` identity |
+| Runtime instance | `instances/<name>/seed.iso` | Final instance identity and configuration |
+
+No runtime user or runtime private key is baked into the Golden Image.
 
 ---
 
-# 🔐 Secret Flow
+# 7. Security
 
-### Local
+**Never commit:** `ubuntu.auto.pkrvars.hcl`, `.env`, private SSH keys, runtime seed files, runtime password hashes, GRUB password hashes, temporary runner credentials.
 
-```text
-.env
- │
- └── GRUB_PASSWORD_HASH
-          │
-          ▼
-export PKR_VAR_grub_password_hash
-          │
-          ▼
-        Packer
+The `packer/virtualbox/instances/` folder should stay local — `.gitignore`:
+
+```gitignore
+packer/virtualbox/instances/
 ```
 
-### GitHub Actions
-
-```text
-GitHub Secrets
-      │
-      ├── GRUB_PASSWORD_HASH
-      ├── PACKER_SSH_PASSWORD
-      └── PACKER_SSH_PRIVATE_KEY
-                    │
-                    ▼
-             GitHub Runner
-                    │
-                    ▼
-                  Packer
-```
+Check before committing: `git status`. The repo also includes `.gitleaks.toml` for secret scanning.
 
 ---
 
-# 🛡️ Security Rules
+# 8. Troubleshooting
 
-Never commit:
-
-```text
-.env
-GRUB password hashes
-SSH passwords
-private SSH keys
-temporary credentials
-runner credentials
-```
-
-Before committing, check:
-
-```bash
-git status
-```
-
-and optionally:
-
-```bash
-git check-ignore .env
-```
-
-The repository also contains:
-
-```text
-.gitleaks.toml
-```
-
-to support secret scanning.
+| Issue | Check |
+|---|---|
+| Packer formatting fails | `packer fmt -recursive .` then `packer fmt -check -recursive .` |
+| ISO not found | `ls -lh /path/to/ubuntu.iso` — verify it's accessible from the Packer machine |
+| Runtime user not created | Confirm `seed.iso` was attached **before** first boot; `cloud-init status --long`; `lsblk -f` to see the NoCloud disk |
+| cloud-init doesn't re-run | Runtime provisioning needs a fresh clone/import with a unique `instance-id` — generate a new seed via `create-instance.ps1` |
+| SSH connection fails | `ip addr`, `sudo systemctl status ssh`, check `/home/<runtime-user>/.ssh/authorized_keys` |
 
 ---
 
-#  Troubleshooting
+# Related Documentation
 
-## GRUB variable is empty
-
-Check:
-
-```bash
-printf '%s\n' "${#GRUB_PASSWORD_HASH}"
-```
-
-Then:
-
-```bash
-printf '%s\n' "${#PKR_VAR_grub_password_hash}"
-```
-
-If necessary:
-
-```bash
-export PKR_VAR_grub_password_hash="$GRUB_PASSWORD_HASH"
-```
-
----
-
-## `.pkrvars.hcl` does not exist
-
-Create it from the example:
-
-```bash
-cp ubuntu.auto.pkrvars.hcl.example ubuntu.auto.pkrvars.hcl
-```
-
-Then edit:
-
-```bash
-nano ubuntu.auto.pkrvars.hcl
-```
-
----
-
-## Packer formatting fails
-
-Run:
-
-```bash
-packer fmt -recursive .
-```
-
-Then:
-
-```bash
-packer fmt -check -recursive .
-```
-
----
-
-## ISO cannot be found
-
-Verify the configured file:
-
-```bash
-ls -lh /path/to/ubuntu.iso
-```
-
-and check the configured URI.
-
----
-
-## VirtualBox is unavailable
-
-Check:
-
-```bash
-VBoxManage --version
-```
-
----
-
-# 📚 Related Documentation
-
-➡️ [Main Project README](../../README.md)
-
-➡️ [Google Cloud Golden Image](../gcp/README.md)
+- [Main Project README](../../README.md)
+- [Google Cloud Golden Image](../gcp/README.md)
 
 ---
 
 <div align="center">
 
-### 📦 Local or automated. Same hardening. Same validation.
+### Build once. Seal once. Provision unique instances at runtime.
 
 </div>
