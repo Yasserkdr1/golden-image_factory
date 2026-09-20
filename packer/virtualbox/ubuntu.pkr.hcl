@@ -264,7 +264,7 @@ build {
     execute_command = "echo '${var.ssh_password}' | sudo -S bash '{{ .Path }}'"
 
     expect_disconnect = true
-    skip_clean = true
+    skip_clean        = true
 
   }
 
