@@ -106,6 +106,8 @@ rm -rf /var/tmp/*
 # ------------------------------------------------------------
 
 echo "[SEAL] Syncing filesystem..."
+echo "[SEAL] Removing Packer temporary sealing script..."
+rm -f -- "$CURRENT_SCRIPT"
 
 sync
 
