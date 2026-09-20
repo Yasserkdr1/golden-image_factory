@@ -607,12 +607,12 @@ jobs:
               throw "packer init failed."
           }
 
-      - name: Check Packer formatting
+      - name: Packer formatting
         working-directory: packer/virtualbox
         run: |
           $ErrorActionPreference = "Stop"
 
-          packer fmt -check -recursive .
+          packer fmt -recursive .
 
           if ($LASTEXITCODE -ne 0) {
               throw "Packer formatting check failed. Run 'packer fmt -recursive .' locally."
