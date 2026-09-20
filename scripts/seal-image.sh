@@ -2,6 +2,7 @@
 
 set -euo pipefail
 
+CURRENT_SCRIPT="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 BUILD_USER="packer"
 BUILD_HOME="/home/${BUILD_USER}"
 
